@@ -26,6 +26,32 @@ export type Phase = 'lobby' | 'playing' | 'dead' | 'won';
 
 export type NetConfig = { n: number; mineCount: number };
 
+/** Carte proposée à l'ouverture d'une salle, tant que l'hôte n'a rien choisi. */
+export const DEFAULT_NET_CONFIG: NetConfig = { n: 30, mineCount: 150 };
+
+/**
+ * Code de salle : plusieurs groupes partagent le même serveur, chacun dans sa
+ * salle. Le code sert aussi de clé d'accès, d'où une longueur minimale.
+ */
+export const ROOM_CODE_RE = /^[a-z0-9]{4,12}$/;
+
+/** @returns le code en minuscules, ou null s'il n'est pas valide. */
+export function normalizeRoomCode(raw: string | null | undefined): string | null {
+  const code = String(raw ?? '').trim().toLowerCase();
+  return ROOM_CODE_RE.test(code) ? code : null;
+}
+
+/** Sans 0/o, 1/l/i : le code se dicte et se recopie sans ambiguïté. */
+const ROOM_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+
+export function randomRoomCode(length = 6): string {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (const b of bytes) out += ROOM_ALPHABET[b % ROOM_ALPHABET.length];
+  return out;
+}
+
 export type Peer = { id: PlayerId; x: number; y: number; view: Rect };
 
 export type ClientMessage =

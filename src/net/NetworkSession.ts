@@ -121,7 +121,9 @@ export class NetworkSession implements Session {
     };
     ws.onmessage = (e: MessageEvent) => this.receive(e.data);
     ws.onclose = () => {
-      if (this.disposed) return;
+      // Refus explicite du serveur (salle complète, code invalide…) : se
+      // reconnecter donnerait la même réponse, en boucle.
+      if (this.disposed || this.lastError) return;
       this.connection = 'lost';
       this.emitState();
       const delay = RECONNECT_MS[Math.min(this.attempt++, RECONNECT_MS.length - 1)];

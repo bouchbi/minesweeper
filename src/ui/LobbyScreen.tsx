@@ -7,20 +7,38 @@ import { PlayerList } from './PlayerList';
  * Salle d'attente. L'hôte — le premier joueur connecté — choisit la carte et
  * lance ; les autres voient la configuration se mettre à jour en direct.
  */
-export function LobbyScreen({ session, onLeave }: { session: NetworkSession; onLeave: () => void }) {
+type Props = { session: NetworkSession; code: string; onLeave: () => void };
+
+export function LobbyScreen({ session, code, onLeave }: Props) {
   const isHost = session.canRestart;
   const [nText, setNText] = useState(String(session.config.n));
   const [minesText, setMinesText] = useState(String(session.config.mineCount));
+  const [copied, setCopied] = useState(false);
+  const inviteUrl = `${location.origin}/?room=${code}`;
 
   // Un invité suit la configuration de l'hôte ; l'hôte garde sa saisie.
   const n = isHost ? Number.parseInt(nText, 10) : session.config.n;
   const mineCount = isHost ? Number.parseInt(minesText, 10) : session.config.mineCount;
   const error = isHost ? validateConfig(n, mineCount) : null;
 
-  const push = (nextN: number, nextMines: number) => {
-    setNText(String(nextN));
-    setMinesText(String(nextMines));
+  // Le texte saisi est gardé tel quel (un champ vidé reste vide, et non
+  // « NaN ») ; seule une configuration valide part au serveur.
+  const push = (nextNText: string, nextMinesText: string) => {
+    setNText(nextNText);
+    setMinesText(nextMinesText);
+    const nextN = Number.parseInt(nextNText, 10);
+    const nextMines = Number.parseInt(nextMinesText, 10);
     if (!validateConfig(nextN, nextMines)) session.setConfig({ n: nextN, mineCount: nextMines });
+  };
+
+  const copyInvite = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* presse-papiers refusé (http non local, permissions) : le lien reste sélectionnable */
+    }
   };
 
   return (
@@ -34,6 +52,16 @@ export function LobbyScreen({ session, onLeave }: { session: NetworkSession; onL
               ? 'Connexion perdue — reconnexion en cours…'
               : 'Connexion au serveur…'}
         </p>
+
+        <h2>
+          Salle <span className="mono">{code}</span>
+        </h2>
+        <div className="invite">
+          <input readOnly value={inviteUrl} onFocus={(e) => e.target.select()} aria-label="Lien d'invitation" />
+          <button className="btn" type="button" onClick={copyInvite}>
+            {copied ? 'Copié' : 'Copier le lien'}
+          </button>
+        </div>
 
         <h2>Joueurs ({session.players.length})</h2>
         <PlayerList players={session.players} selfId={session.selfId} />
@@ -49,7 +77,7 @@ export function LobbyScreen({ session, onLeave }: { session: NetworkSession; onL
                   value={nText}
                   min={5}
                   max={MAX_N}
-                  onChange={(e) => push(Number.parseInt(e.target.value, 10), mineCount)}
+                  onChange={(e) => push(e.target.value, minesText)}
                 />
                 <small>
                   {Number.isFinite(n) && n > 0 ? `${n} × ${n} = ${(n * n).toLocaleString('fr-FR')} cases` : ' '}
@@ -61,7 +89,7 @@ export function LobbyScreen({ session, onLeave }: { session: NetworkSession; onL
                   type="number"
                   value={minesText}
                   min={1}
-                  onChange={(e) => push(n, Number.parseInt(e.target.value, 10))}
+                  onChange={(e) => push(nText, e.target.value)}
                 />
                 <small>{!error ? `densité ${densityPercent(n, mineCount).toFixed(1)} %` : ' '}</small>
               </label>
@@ -73,7 +101,7 @@ export function LobbyScreen({ session, onLeave }: { session: NetworkSession; onL
                   key={p.id}
                   type="button"
                   className={`preset${p.n === n && p.mineCount === mineCount ? ' active' : ''}`}
-                  onClick={() => push(p.n, p.mineCount)}
+                  onClick={() => push(String(p.n), String(p.mineCount))}
                 >
                   <strong>{p.name}</strong>
                   <span className="mono">

@@ -7,7 +7,7 @@ import { LanScreen } from './ui/LanScreen';
 type Screen =
   | { kind: 'home' }
   | { kind: 'solo'; config: GameConfig; seq: number }
-  | { kind: 'lan'; url: string; name: string };
+  | { kind: 'lan'; url: string; name: string; code: string };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: 'home' });
@@ -16,7 +16,7 @@ export function App() {
     return (
       <HomeScreen
         onStart={(config) => setScreen({ kind: 'solo', config, seq: Date.now() })}
-        onJoinLan={(url, name) => setScreen({ kind: 'lan', url, name })}
+        onJoinLan={(url, name, code) => setScreen({ kind: 'lan', url, name, code })}
       />
     );
   }
@@ -27,6 +27,7 @@ export function App() {
         key={screen.url}
         url={screen.url}
         name={screen.name}
+        code={screen.code}
         onLeave={() => setScreen({ kind: 'home' })}
       />
     );

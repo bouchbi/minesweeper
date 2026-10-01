@@ -69,7 +69,9 @@ body {
 .field > span { font-size: 13px; color: var(--muted); }
 .field > small { min-height: 18px; font-size: 12px; color: var(--muted); }
 
-input[type="number"] {
+input[type="number"],
+.field input,
+.invite input {
   width: 100%;
   padding: 10px 12px;
   border-radius: 8px;
@@ -80,7 +82,9 @@ input[type="number"] {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-input[type="number"]:focus {
+input[type="number"]:focus,
+.field input:focus,
+.invite input:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -277,7 +281,7 @@ kbd {
 
 .lan-form {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr auto auto;
   gap: 12px;
   align-items: end;
 }
@@ -287,3 +291,15 @@ kbd {
 }
 
 .lobby-leave { margin-top: 24px; }
+
+.lan-advanced { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.lan-advanced summary { cursor: pointer; margin-bottom: 8px; }
+
+.invite {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+.invite input { flex: 1; min-width: 0; }

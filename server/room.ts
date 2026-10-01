@@ -7,7 +7,9 @@ import {
   revealAllMines,
   toggleFlag,
 } from '../src/game/rules';
+import { MAX_N, MIN_N } from '../src/game/presets';
 import {
+  DEFAULT_NET_CONFIG,
   encodeMines,
   encodeReveal,
   encodeSnapshot,
@@ -33,8 +35,6 @@ const HEARTBEAT_MS = 1000;
  *  Surchargeable par ABANDON_MS, ce qui permet de le tester sans attendre. */
 const ABANDON_MS = Number(process.env.ABANDON_MS ?? 60_000);
 
-const DEFAULT_CONFIG: NetConfig = { n: 30, mineCount: 150 };
-
 export type Connection = {
   id: PlayerId;
   name: string;
@@ -50,12 +50,11 @@ export type Connection = {
  * clients ne reçoivent que ce qui a été révélé, et les positions des mines
  * uniquement à la défaite.
  *
- * Il n'y a qu'une partie par serveur — on est en LAN, un système de salons
- * n'apporterait rien.
+ * Une Room = une salle, identifiée par son code (voir `server/main.ts`).
  */
 export class Room {
   private clients = new Map<PlayerId, Connection>();
-  private config: NetConfig = DEFAULT_CONFIG;
+  private config: NetConfig = DEFAULT_NET_CONFIG;
   private phase: Phase = 'lobby';
   private board: Board | null = null;
   private flagOwner = new Uint8Array(0);
@@ -73,7 +72,9 @@ export class Room {
   private timer: ReturnType<typeof setInterval> | null = null;
   private abandonTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor() {
+  /** @param onEmpty appelé quand la salle est au lobby et que plus personne
+   *  n'y est connecté : le serveur peut alors la libérer. */
+  constructor(private readonly onEmpty: () => void = () => {}) {
     this.timer = setInterval(() => this.tickPresence(), PRESENCE_MS);
   }
 
@@ -125,13 +126,21 @@ export class Room {
     // Plus personne : la partie est abandonnée. Sans ça, elle resterait
     // éternellement en cours et le prochain arrivant tomberait dedans sans
     // pouvoir en sortir.
-    const stillHere = [...this.clients.values()].some((c) => c.connected);
-    if (!stillHere && this.phase !== 'lobby' && !this.abandonTimer) {
-      this.abandonTimer = setTimeout(() => {
-        this.abandonTimer = null;
-        this.toLobby();
-      }, ABANDON_MS);
+    if (this.isEmpty()) {
+      if (this.phase === 'lobby') this.onEmpty();
+      else if (!this.abandonTimer) {
+        this.abandonTimer = setTimeout(() => {
+          this.abandonTimer = null;
+          this.toLobby();
+          if (this.isEmpty()) this.onEmpty();
+        }, ABANDON_MS);
+      }
     }
+  }
+
+  private isEmpty(): boolean {
+    for (const c of this.clients.values()) if (c.connected) return false;
+    return true;
   }
 
   /** Ramène la salle au lobby : la configuration reste, le plateau disparaît. */
@@ -202,6 +211,9 @@ export class Room {
     } catch {
       return;
     }
+    // Le serveur est exposé à Internet : `null`, un nombre ou un objet sans
+    // `t` ne doivent pas faire tomber le processus sur `msg.t`.
+    if (typeof msg !== 'object' || msg === null || typeof msg.t !== 'string') return;
     switch (msg.t) {
       case 'join':
         conn.name = String(msg.name ?? '').slice(0, 24) || conn.name;
@@ -254,11 +266,16 @@ export class Room {
         this.doFlag(conn, msg.i);
         break;
 
-      case 'cursor':
+      case 'cursor': {
+        // La vue est rediffusée telle quelle à tous les joueurs : on la
+        // reconstruit champ par champ plutôt que de relayer un objet arbitraire.
+        const view = sanitizeRect(msg.view);
+        if (!view) return;
         conn.cursor = { x: msg.x | 0, y: msg.y | 0 };
-        conn.view = msg.view;
+        conn.view = view;
         this.presenceDirty = true;
         break;
+      }
     }
   }
 
@@ -362,8 +379,21 @@ export class Room {
   }
 }
 
-function sanitizeConfig(c: NetConfig): NetConfig {
-  const n = Math.max(5, Math.min(1000, Math.floor(c?.n ?? DEFAULT_CONFIG.n)));
-  const mineCount = Math.max(1, Math.min(n * n - 1, Math.floor(c?.mineCount ?? 1)));
+function finiteOr(v: unknown, fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+
+function sanitizeConfig(c: NetConfig | null | undefined): NetConfig {
+  // `Math.max(5, NaN)` vaut NaN : sans le filtre `finiteOr`, une valeur non
+  // numérique produirait un plateau incohérent diffusé à toute la salle.
+  const n = Math.max(MIN_N, Math.min(MAX_N, Math.floor(finiteOr(c?.n, DEFAULT_NET_CONFIG.n))));
+  const mineCount = Math.max(1, Math.min(n * n - 1, Math.floor(finiteOr(c?.mineCount, 1))));
   return { n, mineCount };
+}
+
+function sanitizeRect(r: Rect | null | undefined): Rect | null {
+  if (typeof r !== 'object' || r === null) return null;
+  const { x0, y0, x1, y1 } = r;
+  for (const v of [x0, y0, x1, y1]) if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  return { x0, y0, x1, y1 };
 }

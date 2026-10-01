@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { densityPercent, MAX_N, PRESETS, validateConfig } from '../game/presets';
 import { loadLastConfig, saveLastConfig } from '../game/settings';
+import { normalizeRoomCode, randomRoomCode } from '../../shared/protocol';
 import type { GameConfig } from './GameScreen';
 
 /** Au-delà, on prévient sans bloquer : ça reste jouable, juste très grand. */
@@ -12,16 +13,29 @@ const DEFAULT_CONFIG: GameConfig = { n: 100, mineCount: 2000 };
 const presetIdFor = (n: number, mineCount: number): string | null =>
   PRESETS.find((p) => p.n === n && p.mineCount === mineCount)?.id ?? null;
 
-/** Serveur de jeu par défaut : la page est servie par lui en LAN, sauf en
+/** Serveur de jeu par défaut : celui qui sert la page (LAN ou VPS), sauf en
  *  développement où Vite occupe le 5173 et le serveur écoute sur 8080. */
 function defaultServer(): string {
   if (typeof location === 'undefined') return 'localhost:8080';
   return location.port === '5173' ? `${location.hostname}:8080` : location.host;
 }
 
+/** Code reçu par un lien d'invitation (`/?room=abc123`). */
+function invitedRoom(): string {
+  if (typeof location === 'undefined') return '';
+  return normalizeRoomCode(new URLSearchParams(location.search).get('room')) ?? '';
+}
+
+function wsUrl(server: string, code: string): string | null {
+  const host = server.trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (!host) return null;
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${scheme}://${host}/ws?room=${encodeURIComponent(code)}`;
+}
+
 type HomeProps = {
   onStart: (config: GameConfig) => void;
-  onJoinLan: (url: string, name: string) => void;
+  onJoinLan: (url: string, name: string, code: string) => void;
 };
 
 export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
@@ -35,6 +49,22 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
   );
   const [server, setServer] = useState(defaultServer);
   const [playerName, setPlayerName] = useState('');
+  const [roomText, setRoomText] = useState(invitedRoom);
+  const [roomError, setRoomError] = useState<string | null>(null);
+
+  const joinRoom = (code: string | null) => {
+    if (!code) {
+      setRoomError('Le code de salle fait 4 à 12 lettres ou chiffres.');
+      return;
+    }
+    const url = wsUrl(server, code);
+    if (!url) {
+      setRoomError('Adresse du serveur manquante.');
+      return;
+    }
+    setRoomError(null);
+    onJoinLan(url, playerName.trim() || 'Joueur', code);
+  };
 
   const n = Number.parseInt(nText, 10);
   const mineCount = Number.parseInt(minesText, 10);
@@ -118,31 +148,54 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
           </button>
         </form>
 
-        <h2>Jouer en réseau</h2>
+        <h2>Jouer à plusieurs</h2>
         <p className="lan-help">
-          Tous les joueurs creusent la même carte. Lance <code>npm run serve</code> sur une
-          machine, puis saisis ici l'adresse qu'elle affiche.
+          Tous les joueurs d'une salle creusent la même carte. Crée une salle et partage son
+          code, ou saisis celui qu'on t'a donné.
         </p>
         <form
           className="lan-form"
           onSubmit={(e) => {
             e.preventDefault();
-            const host = server.trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
-            if (!host) return;
-            const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-            onJoinLan(`${scheme}://${host}/ws`, playerName.trim() || 'Joueur');
+            joinRoom(normalizeRoomCode(roomText));
           }}
         >
           <label className="field">
-            <span>Adresse du serveur</span>
-            <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="192.168.1.10:8080" />
+            <span>Code de salle</span>
+            <input
+              value={roomText}
+              onChange={(e) => setRoomText(e.target.value)}
+              placeholder="abc123"
+              maxLength={12}
+              autoCapitalize="off"
+              spellCheck={false}
+            />
           </label>
           <label className="field">
             <span>Ton pseudo</span>
             <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Joueur" maxLength={24} />
           </label>
           <button className="btn" type="submit">Rejoindre</button>
+          <button
+            className="btn"
+            type="button"
+            onClick={() => {
+              const code = randomRoomCode();
+              setRoomText(code);
+              joinRoom(code);
+            }}
+          >
+            Créer une salle
+          </button>
         </form>
+        {roomError && <p className="error">{roomError}</p>}
+        <details className="lan-advanced">
+          <summary>Avancé</summary>
+          <label className="field">
+            <span>Adresse du serveur</span>
+            <input value={server} onChange={(e) => setServer(e.target.value)} placeholder="192.168.1.10:8080" />
+          </label>
+        </details>
 
         <h2>Dispositions</h2>
         <div className="presets">

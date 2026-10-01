@@ -8,7 +8,8 @@ rendu Canvas avec zoom/pan et navigation au clavier.
 npm install
 npm run dev        # solo, http://localhost:5173
 npm run build      # tsc --noEmit && vite build
-npm run serve      # co-op LAN : compile puis sert le jeu + le serveur de partie
+npm run serve      # co-op : compile puis sert le jeu + le serveur de partie
+npm start          # sert ce qui est déjà compilé (npm run build:all)
 ```
 
 `npm run serve` affiche les adresses à donner aux autres joueurs :
@@ -129,10 +130,22 @@ Côté règles, sur une 1000×1000 : `placeMines` 10 ms, `computeAdjacency` 8 ms
 
 ---
 
-## Co-op LAN
+## Co-op (LAN ou serveur)
 
-Plusieurs joueurs creusent **la même carte** en même temps. Une seule partie par
-serveur, 8 joueurs maximum.
+Plusieurs joueurs creusent **la même carte** en même temps, 8 joueurs maximum
+par salle.
+
+### Salles
+
+Un même serveur héberge plusieurs parties indépendantes, chacune identifiée par
+un **code de salle** (4 à 12 lettres ou chiffres, insensible à la casse). À
+l'accueil, **Créer une salle** tire un code de 6 caractères sans caractères
+ambigus, et **Rejoindre** entre dans la salle dont on a saisi le code. Le lobby
+affiche un lien d'invitation (`https://…/?room=abc123`) qui pré-remplit ce code.
+
+Une salle est créée au premier arrivant et libérée quand elle se vide : tout de
+suite si elle est au lobby, sinon après le délai d'abandon (voir plus bas). Le
+code fait office de clé : quiconque le connaît peut entrer.
 
 ### Architecture
 
@@ -151,8 +164,9 @@ Côté client, `Session` (`src/game/session.ts`) masque la différence :
 `GameScreen` ne sait pas lequel des deux il affiche.
 
 **Pas d'application optimiste** : on envoie, le serveur tranche, on applique son
-écho. Sur un LAN le RTT est sous la milliseconde — et ça supprime tout besoin de
-rollback.
+écho. Sur un LAN le RTT est sous la milliseconde, sur un serveur distant chaque
+clic attend un aller-retour (quelques dizaines de ms) — et ça supprime tout
+besoin de rollback.
 
 ### L'encodage des deltas
 
@@ -161,7 +175,7 @@ exclu. La structure du démineur aide : l'intérieur d'une cascade est entièrem
 en `adj = 0`, donc contigu ligne par ligne. `shared/protocol.ts` encode chaque
 révélation en **séquences contiguës + les seules cases numérotées**.
 
-Mesuré (`protocol.test.ts`) :
+Mesuré :
 
 | cas | cases ouvertes | encodé | coût |
 |---|---|---|---|
@@ -190,7 +204,7 @@ le monde, toutes les bombes sont dévoilées.
 
 ### Contrôle de la partie
 
-Le premier joueur connecté est l'**hôte** (marqué ★). Si l'hôte part, le suivant
+Dans chaque salle, le premier joueur connecté est l'**hôte** (marqué ★). Si l'hôte part, le suivant
 est promu automatiquement.
 
 | Bouton | Qui | Effet |
@@ -204,3 +218,24 @@ est. Une partie que **plus personne** ne suit est libérée au bout d'une minute
 et la salle retourne au lobby — assez long pour qu'un simple rechargement de
 page ne la fasse pas perdre. Le délai est réglable par la variable
 d'environnement `ABANDON_MS`.
+
+### Déploiement
+
+Le serveur est exposable sur Internet : il ignore les messages malformés, coupe
+toute trame cliente au-delà de 16 Kio, et ferme par ping/pong (30 s) les
+connexions mortes, qui sinon occuperaient une place dans leur salle.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `8080` | port HTTP + WebSocket (`/ws?room=<code>`) |
+| `HOST` | `0.0.0.0` | interface d'écoute |
+| `MAX_ROOMS` | `50` | salles ouvertes simultanément (une 1000×1000 pèse ~9 Mo) |
+| `ABANDON_MS` | `60000` | délai avant de libérer une partie que plus personne ne suit |
+
+**Docker / Coolify** — le `Dockerfile` compile client et serveur puis ne garde
+que `ws` en dépendance. Dans Coolify, choisir le build pack *Dockerfile* et le
+port exposé `8080`. Traefik, placé devant par Coolify, fournit le HTTPS et
+relaie le WebSocket sans configuration : servie en https, la page se connecte
+d'elle-même en `wss`. Sans Dockerfile (Nixpacks), `npm run build:all` puis
+`npm start` font la même chose.
+

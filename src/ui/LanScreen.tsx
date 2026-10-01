@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useState } from 'react';
+import { DEFAULT_NET_CONFIG } from '../../shared/protocol';
 import { NetworkSession } from '../net/NetworkSession';
 import { GameScreen } from './GameScreen';
 import { LobbyScreen } from './LobbyScreen';
@@ -7,8 +8,10 @@ import { LobbyScreen } from './LobbyScreen';
  * Conteneur d'une partie réseau : détient la session pour toute sa durée et
  * bascule entre le lobby et le plateau selon la phase annoncée par le serveur.
  */
-export function LanScreen({ url, name, onLeave }: { url: string; name: string; onLeave: () => void }) {
-  const [session] = useState(() => new NetworkSession(url, name, { n: 30, mineCount: 150 }));
+type Props = { url: string; name: string; code: string; onLeave: () => void };
+
+export function LanScreen({ url, name, code, onLeave }: Props) {
+  const [session] = useState(() => new NetworkSession(url, name, DEFAULT_NET_CONFIG));
   const [, forceRender] = useReducer((v: number) => v + 1, 0);
 
   useEffect(() => {
@@ -34,7 +37,7 @@ export function LanScreen({ url, name, onLeave }: { url: string; name: string; o
   }
 
   if (session.phase === 'lobby') {
-    return <LobbyScreen session={session} onLeave={onLeave} />;
+    return <LobbyScreen session={session} code={code} onLeave={onLeave} />;
   }
 
   return (
