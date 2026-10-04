@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { BONUS_DISCO, BONUS_HEART, BONUS_PROBE, BONUS_SHIELD } from '../game/board';
-import { PROBE_RADIUS, SHIELD_RADIUS } from '../game/rules';
+import { BONUS_DISCO, BONUS_HEART, BONUS_SHIELD } from '../game/board';
+import { SHIELD_RADIUS } from '../game/rules';
 import type { GameConfig, Session } from '../game/session';
 import { createGameView, type GameView } from '../render/gameView';
 import type { GameEvent, Item } from '../../shared/protocol';
@@ -34,7 +34,6 @@ type Props = {
 
 /** Couleur du flash selon ce qui s'est passé. */
 const FLASH_COLOR: Record<number, string> = {
-  [BONUS_PROBE]: '#a78bfa',
   [BONUS_SHIELD]: '#38bdf8',
   [BONUS_HEART]: '#f472b6',
   [BONUS_DISCO]: '#fbbf24',
@@ -47,22 +46,17 @@ function flashFor(view: GameView, n: number, e: GameEvent, now: number): void {
   const x = e.i % n;
   const y = (e.i / n) | 0;
   let r = 0;
+  let diamond = false;
   let color = '#fbbf24';
   if (e.kind === 'pickup') color = FLASH_COLOR[e.bonus] ?? color;
   else if (e.kind === 'zone') r = 1;
   else if (e.kind === 'life') color = '#ef4444';
   else if (e.kind === 'use') {
-    r = e.item === 'probe' ? PROBE_RADIUS : SHIELD_RADIUS;
-    color = e.item === 'probe' ? FLASH_COLOR[BONUS_PROBE] : FLASH_COLOR[BONUS_SHIELD];
+    r = SHIELD_RADIUS;
+    diamond = true;
+    color = FLASH_COLOR[BONUS_SHIELD];
   }
-  view.flashes.push({
-    x0: Math.max(0, x - r),
-    y0: Math.max(0, y - r),
-    x1: Math.min(n, x + r + 1),
-    y1: Math.min(n, y + r + 1),
-    t0: now,
-    color,
-  });
+  view.flashes.push({ x, y, r, diamond, t0: now, color });
 }
 
 /** Message du HUD pour un événement, ou null s'il n'en mérite pas. */
@@ -163,12 +157,12 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
   const [armed, setArmed] = useState<Item | null>(null);
   const isOver = session.over !== null;
   const inventory = session.inventory;
-  const stock = (item: Item) => (inventory ? (item === 'probe' ? inventory.probes : inventory.shields) : 0);
+  const stock = (item: Item) => (inventory && item === 'shield' ? inventory.shields : 0);
 
   const arm = useCallback(
     (item: Item | null) => {
       const inv = session.inventory;
-      const has = inv && item && (item === 'probe' ? inv.probes : inv.shields) > 0;
+      const has = inv && item === 'shield' && inv.shields > 0;
       setArmed(item && has && session.over === null ? item : null);
     },
     [session],
@@ -290,7 +284,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
 
       <footer className="help mono">
         flèches déplacer · maj+flèches ×10 · r révéler · f drapeau
-        {inventory ? ' · 1 sonde · 2 bouclier' : ''} · molette zoom · glisser déplacer · +/− zoom · 0
+        {inventory ? ' · 1 bouclier' : ''} · molette zoom · glisser déplacer · +/− zoom · 0
         vue globale · échap {armed ? 'annuler' : 'quitter'}
       </footer>
     </div>

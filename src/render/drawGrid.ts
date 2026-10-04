@@ -1,5 +1,5 @@
 import { COVERED, DEFUSED, FLAGGED, type Board } from '../game/board';
-import { PROBE_RADIUS, SHIELD_RADIUS } from '../game/rules';
+import { SHIELD_RADIUS } from '../game/rules';
 import { PLAYER_COLORS } from '../../shared/protocol';
 import { FLASH_MS, type GameView } from './gameView';
 import {
@@ -72,7 +72,7 @@ export function drawGrid(
   // ImageData d'un pixel par case, agrandi d'un coup.
   if (cell < LOD_PIXEL) {
     drawPixels(ctx, board, r, originX, originY, cell);
-    drawCursor(ctx, cursor, originX, originY, cell, n);
+    if (view.keyboard) drawCursor(ctx, cursor, originX, originY, cell, n);
     drawAim(ctx, view, originX, originY, cell, n);
     return drawFlashes(ctx, view, originX, originY, cell);
   }
@@ -126,13 +126,43 @@ export function drawGrid(
   }
 
   drawPeerCursors(ctx, view, originX, originY, cell, n);
-  drawCursor(ctx, cursor, originX, originY, cell, n);
+  if (view.keyboard) drawCursor(ctx, cursor, originX, originY, cell, n);
   drawAim(ctx, view, originX, originY, cell, n);
   return drawFlashes(ctx, view, originX, originY, cell);
 }
 
-/** Zone que couvrira l'objet armé, autour de la case visée (souris, sinon
- *  curseur clavier). */
+/**
+ * Trace le contour en escalier d'un losange de rayon `r` (distance de
+ * Manhattan) centré sur la case (cx, cy) : une ligne de largeur 2(r-|dy|)+1
+ * par rangée. Le chemin n'est pas fermé par un fill/stroke ici.
+ */
+function diamondPath(
+  ctx: CanvasRenderingContext2D,
+  originX: number,
+  originY: number,
+  cell: number,
+  cx: number,
+  cy: number,
+  r: number,
+): void {
+  ctx.beginPath();
+  // Bord droit, de haut en bas, puis bord gauche, de bas en haut.
+  for (let dy = -r; dy <= r; dy++) {
+    const x = originX + (cx + r - Math.abs(dy) + 1) * cell;
+    ctx.lineTo(x, originY + (cy + dy) * cell);
+    ctx.lineTo(x, originY + (cy + dy + 1) * cell);
+  }
+  for (let dy = r; dy >= -r; dy--) {
+    const x = originX + (cx - r + Math.abs(dy)) * cell;
+    ctx.lineTo(x, originY + (cy + dy + 1) * cell);
+    ctx.lineTo(x, originY + (cy + dy) * cell);
+  }
+  ctx.closePath();
+}
+
+/** Zone que couvrira l'objet armé, autour de la case visée : sous la souris,
+ *  ou sous le curseur clavier si c'est lui qui pilote. Rien quand la souris
+ *  est sortie du plateau (sur le HUD, par exemple). */
 function drawAim(
   ctx: CanvasRenderingContext2D,
   view: GameView,
@@ -142,26 +172,23 @@ function drawAim(
   n: number,
 ): void {
   if (!view.armed) return;
-  const at = view.pointer ?? view.cursor;
-  if (at.x < 0 || at.y < 0 || at.x >= n || at.y >= n) return;
-  const r = view.armed === 'probe' ? PROBE_RADIUS : SHIELD_RADIUS;
-  const x0 = Math.max(0, at.x - r);
-  const y0 = Math.max(0, at.y - r);
-  const x1 = Math.min(n, at.x + r + 1);
-  const y1 = Math.min(n, at.y + r + 1);
+  const at = view.pointer ?? (view.keyboard ? view.cursor : null);
+  if (!at || at.x < 0 || at.y < 0 || at.x >= n || at.y >= n) return;
   const lw = Math.max(2, Math.round(cell * 0.08));
+  ctx.save();
+  // Le losange peut déborder du plateau : on n'en montre que la partie utile.
+  ctx.beginPath();
+  ctx.rect(originX, originY, n * cell, n * cell);
+  ctx.clip();
+  diamondPath(ctx, originX, originY, cell, at.x, at.y, SHIELD_RADIUS);
   ctx.fillStyle = 'rgba(167, 139, 250, 0.16)';
-  ctx.fillRect(originX + x0 * cell, originY + y0 * cell, (x1 - x0) * cell, (y1 - y0) * cell);
+  ctx.fill();
   ctx.lineWidth = lw;
+  ctx.lineJoin = 'miter';
   ctx.strokeStyle = C.aim;
   ctx.setLineDash([Math.max(4, cell * 0.3), Math.max(3, cell * 0.2)]);
-  ctx.strokeRect(
-    originX + x0 * cell + lw / 2,
-    originY + y0 * cell + lw / 2,
-    (x1 - x0) * cell - lw,
-    (y1 - y0) * cell - lw,
-  );
-  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /**
@@ -179,27 +206,31 @@ function drawFlashes(
   if (flashes.length === 0) return false;
   const now = performance.now();
   let kept = 0;
+  ctx.save();
   for (const f of flashes) {
     const t = (now - f.t0) / FLASH_MS;
     if (t >= 1) continue;
     flashes[kept++] = f;
     const a = 1 - t;
-    // Au moins 3 px : sur une carte entièrement dézoomée, un flash d'une case
-    // doit rester repérable.
-    const pad = Math.max(0, (3 - cell * (f.x1 - f.x0)) / 2);
-    const x = originX + f.x0 * cell - pad;
-    const y = originY + f.y0 * cell - pad;
-    const wPx = (f.x1 - f.x0) * cell + pad * 2;
-    const hPx = (f.y1 - f.y0) * cell + pad * 2;
+    if (f.diamond) {
+      diamondPath(ctx, originX, originY, cell, f.x, f.y, f.r);
+    } else {
+      // Au moins 3 px : sur une carte entièrement dézoomée, un flash d'une
+      // case doit rester repérable.
+      const side = (2 * f.r + 1) * cell;
+      const pad = Math.max(0, (3 - side) / 2);
+      ctx.beginPath();
+      ctx.rect(originX + (f.x - f.r) * cell - pad, originY + (f.y - f.r) * cell - pad, side + pad * 2, side + pad * 2);
+    }
     ctx.globalAlpha = a * 0.35;
     ctx.fillStyle = f.color;
-    ctx.fillRect(x, y, wPx, hPx);
+    ctx.fill();
     ctx.globalAlpha = a;
     ctx.lineWidth = Math.max(2, Math.round(cell * 0.1));
     ctx.strokeStyle = f.color;
-    ctx.strokeRect(x, y, wPx, hPx);
+    ctx.stroke();
   }
-  ctx.globalAlpha = 1;
+  ctx.restore();
   flashes.length = kept;
   return kept > 0;
 }

@@ -10,7 +10,7 @@
 export const COVERED = 0;
 export const REVEALED = 1;
 export const FLAGGED = 2;
-/** Mine connue et neutralisée (sonde, bouclier, ou vie consommée) : elle
+/** Mine connue et neutralisée (bouclier, ou vie consommée) : elle
  *  s'affiche, ne fait plus perdre, et ne peut plus recevoir de drapeau. */
 export const DEFUSED = 3;
 
@@ -18,9 +18,7 @@ export type CellState = typeof COVERED | typeof REVEALED | typeof FLAGGED | type
 
 /* Bonus cachés sous des cases sûres, ramassés quand la case est découverte. */
 export const BONUS_NONE = 0;
-/** Objet : révèle les mines d'un carré 5×5. */
-export const BONUS_PROBE = 1;
-/** Objet : découvre sans risque un carré 3×3. */
+/** Objet : découvre sans risque un losange de 4 cases de diagonale. */
 export const BONUS_SHIELD = 2;
 /** Immédiat : une vie de plus (dans la limite du maximum). */
 export const BONUS_HEART = 3;

@@ -33,7 +33,7 @@ du projet ne fait que les lire.
 | `toggleFlag(board, i)` | `COVERED` ↔ `FLAGGED` ; renvoie `-1 \| 0 \| 1` |
 | `revealAllMines(board)` | découvre les mines après un `'boom'` |
 | `placeBonuses(board, safeIndex)` | cache les bonus sous des cases sûres |
-| `defuse` / `probe` / `shield` / `randomOpening` | effets des bonus (voir plus bas) |
+| `defuse` / `shield` / `randomOpening` | effets des bonus (voir plus bas) |
 
 L'orchestration d'une partie (premier clic, vies, réserve, fin de partie) vit
 dans `GameEngine` ([`src/game/engine.ts`](src/game/engine.ts)), pur lui aussi :
@@ -91,7 +91,7 @@ type Board = {
 
 | | |
 |---|---|
-| flèches | déplacer le curseur (la vue suit) |
+| flèches | déplacer le curseur (la vue suit ; masqué dès qu'on joue à la souris) |
 | maj + flèches | sauter de 10 cases |
 | `r` / `f` | révéler / drapeau |
 | molette, `+` / `-` | zoom (centré sur le pointeur pour la molette) |
@@ -99,7 +99,7 @@ type Board = {
 | `0` | vue globale |
 | clic gauche / droit | révéler / drapeau |
 | clic ou glisser sur la minimap | téléporter la vue |
-| `1` / `2` | armer la Sonde / le Bouclier (bonus activés) |
+| `1` | armer le Bouclier (bonus activés) |
 | échap | annuler l'objet armé, sinon quitter la partie |
 
 En fin de partie, **Rejouer** relance la même carte immédiatement et **Changer
@@ -118,19 +118,18 @@ comprise :
 
 | Bonus | Effet |
 |---|---|
-| 🔍 **Sonde** | en réserve ; posée sur une case, désamorce toutes les mines du carré 5×5 autour. Les cases sûres restent couvertes : la sonde donne l'information, la déduction reste au joueur. |
-| 🛡 **Bouclier** | en réserve ; découvre sans risque le carré 3×3 (cases sûres révélées, mines désamorcées, drapeaux faux retirés). |
+| 🛡 **Bouclier** | en réserve ; découvre sans risque un losange de 4 cases de diagonale (13 cases : cases sûres révélées, mines désamorcées, drapeaux faux retirés). Un losange plutôt qu'un carré : ses pointes ouvrent des coins plus faciles à reprendre. |
 | ♥ **Vie** | immédiate, 3 au maximum ; une mine touchée est désamorcée au lieu de faire perdre. |
 | 🪩 **Boule à facettes** | immédiate ; ouvre 4 zones vides au hasard sur la carte : de nouveaux fronts quand on tourne en rond. |
 
-On pose un objet en l'armant (bouton du HUD ou touche `1` / `2`), puis d'un
+On pose le bouclier en l'armant (bouton du HUD ou touche `1`), puis d'un
 clic, ou avec `r`, sur la case visée. La zone couverte s'affiche sous le
 curseur. Une mine **désamorcée** s'affiche sur fond sarcelle, compte comme un
 drapeau au compteur de bombes et ne peut plus être drapeautée.
 
 Dosage : au plus un bonus pour 150 cases sûres **et** un pour 40 mines (les
 devinettes suivent le nombre de mines, pas la taille de la carte). Répartition :
-Sonde 40 %, Vie 25 %, Boule à facettes 20 %, Bouclier 15 %. Le premier clic ne
+Bouclier 55 %, Vie 25 %, Boule à facettes 20 %. Le premier clic ne
 ramasse rien : sa cascade est gratuite, et sur une carte peu minée elle viderait
 la carte de ses bonus d'un seul coup.
 

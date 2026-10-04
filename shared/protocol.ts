@@ -32,11 +32,11 @@ export const DEFAULT_NET_CONFIG: NetConfig = { n: 30, mineCount: 150, bonus: fal
 /* ── Bonus ──────────────────────────────────────────────────────────── */
 
 /** Objets qu'on garde en réserve et qu'on pose sur la case de son choix. */
-export type Item = 'probe' | 'shield';
-export const ITEMS: readonly Item[] = ['probe', 'shield'];
+export type Item = 'shield';
+export const ITEMS: readonly Item[] = ['shield'];
 
 /** Réserve de la partie. En co-op elle est commune à toute la salle. */
-export type Inventory = { lives: number; probes: number; shields: number };
+export type Inventory = { lives: number; shields: number };
 
 /**
  * Ce qui vient de se passer, pour le HUD (messages) et le plateau (flash).

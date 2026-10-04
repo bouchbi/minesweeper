@@ -2,7 +2,6 @@ import {
   BONUS_DISCO,
   BONUS_HEART,
   BONUS_NONE,
-  BONUS_PROBE,
   BONUS_SHIELD,
   COVERED,
   createBoard,
@@ -16,7 +15,6 @@ import {
   placeBonuses,
   placeMines,
   placeTestBonuses,
-  probe,
   randomOpening,
   reveal,
   revealAllMines,
@@ -38,8 +36,8 @@ export type GameConfig = {
 /** Bonus d'une carte de test : deux de chaque, un de chaque d'abord pour
  *  qu'ils soient les premiers placés en bordure de la zone ouverte. */
 const TEST_BONUSES = [
-  BONUS_SHIELD, BONUS_DISCO, BONUS_PROBE, BONUS_HEART,
-  BONUS_SHIELD, BONUS_DISCO, BONUS_PROBE, BONUS_HEART,
+  BONUS_SHIELD, BONUS_DISCO, BONUS_HEART,
+  BONUS_SHIELD, BONUS_DISCO, BONUS_HEART,
 ];
 export type Outcome = 'dead' | 'won';
 
@@ -94,7 +92,7 @@ export class GameEngine {
   constructor(config: GameConfig) {
     this.board = createBoard(config.n, config.mineCount);
     this.testBonuses = config.testBonuses === true;
-    this.inventory = config.bonus || this.testBonuses ? { lives: 0, probes: 0, shields: 0 } : null;
+    this.inventory = config.bonus || this.testBonuses ? { lives: 0, shields: 0 } : null;
     // Chaque case n'est ouverte qu'une fois par partie : n² suffit toujours,
     // même pour une boule à facettes qui en déclenche une autre.
     this.opened = new Int32Array(config.n * config.n);
@@ -152,26 +150,20 @@ export class GameEngine {
   use(item: Item, i: number, by: PlayerId = 0): ActionResult | null {
     const inv = this.inventory;
     if (this.over || !this.seeded || !inv || !this.inBounds(i)) return null;
-    if (item === 'probe' ? inv.probes <= 0 : inv.shields <= 0) return null;
+    if (item !== 'shield' || inv.shields <= 0) return null;
 
     this.begin(by);
     this.inventoryChanged = true;
     this.events.push({ kind: 'use', item, i, by });
 
-    if (item === 'probe') {
-      inv.probes--;
-      this.flags -= probe(this.board, i, this.defused);
-      this.defusedCount += this.defused.length;
-    } else {
-      inv.shields--;
-      const safe: number[] = [];
-      this.flags -= shield(this.board, i, this.defused, safe);
-      this.defusedCount += this.defused.length;
-      // Les mines du carré sont désamorcées avant : ces révélations ne
-      // peuvent pas faire perdre. Une case peut avoir été ouverte entre-temps
-      // par la cascade d'une voisine, d'où le test.
-      for (const j of safe) if (this.board.state[j] === COVERED) this.open(j);
-    }
+    inv.shields--;
+    const safe: number[] = [];
+    this.flags -= shield(this.board, i, this.defused, safe);
+    this.defusedCount += this.defused.length;
+    // Les mines du losange sont désamorcées avant : ces révélations ne
+    // peuvent pas faire perdre. Une case peut avoir été ouverte entre-temps
+    // par la cascade d'une voisine, d'où le test.
+    for (const j of safe) if (this.board.state[j] === COVERED) this.open(j);
     this.drainDisco();
     return this.finish();
   }
@@ -219,7 +211,6 @@ export class GameEngine {
       this.events.push({ kind: 'pickup', bonus, i, by: this.by });
       this.inventoryChanged = true;
       if (bonus === BONUS_HEART) inv.lives = Math.min(MAX_LIVES, inv.lives + 1);
-      else if (bonus === BONUS_PROBE) inv.probes++;
       else if (bonus === BONUS_SHIELD) inv.shields++;
       else if (bonus === BONUS_DISCO) this.pendingDisco++;
     }

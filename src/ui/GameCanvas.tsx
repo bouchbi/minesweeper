@@ -21,7 +21,7 @@ type Props = {
   onFlag: (i: number) => void;
   /** Pose l'objet armé (`view.armed`) sur la case `i`. */
   onUse: (item: Item, i: number) => void;
-  /** Arme un objet (touches 1 / 2), ou désarme avec null. */
+  /** Arme un objet (touche 1), ou désarme avec null. */
   onArm: (item: Item | null) => void;
   onExit: () => void;
   /** La souris a survolé une nouvelle case : diffuser la présence. */
@@ -165,6 +165,13 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onUse, onAr
 
     const onPointerDown = (e: PointerEvent) => {
       canvas.focus();
+      // La souris reprend la main : le curseur clavier ne s'affiche plus
+      // (il continue de suivre les clics, pour que les flèches reprennent
+      // au bon endroit).
+      if (view.keyboard) {
+        view.keyboard = false;
+        requestDraw();
+      }
       if (e.button === 2) {
         // Clic droit avec un objet armé : on annule, on ne pose pas de drapeau.
         if (view.armed) {
@@ -269,6 +276,11 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onUse, onAr
       const n = api.current.board.n;
       const { w, h } = view.canvas;
       const step = e.shiftKey ? FAST_STEP : 1;
+      // Le clavier reprend la main : on réaffiche son curseur.
+      const showCursor = () => {
+        view.keyboard = true;
+        view.pointer = null;
+      };
       let dx = 0;
       let dy = 0;
 
@@ -279,19 +291,20 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onUse, onAr
         case 'ArrowRight': dx = step; break;
         case 'r': case 'R':
           e.preventDefault();
+          showCursor();
           if (api.current.enabled) act(idx(n, view.cursor.x, view.cursor.y));
           view.notify();
           return;
-        case '1':
-        case '2': {
+        case '1': {
           e.preventDefault();
           if (!api.current.enabled) return;
-          const item: Item = e.key === '1' ? 'probe' : 'shield';
+          const item: Item = 'shield';
           api.current.onArm(view.armed === item ? null : item);
           return;
         }
         case 'f': case 'F':
           e.preventDefault();
+          showCursor();
           if (api.current.enabled) api.current.onFlag(idx(n, view.cursor.x, view.cursor.y));
           view.notify();
           return;
@@ -321,8 +334,9 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onUse, onAr
       }
 
       e.preventDefault(); // sinon les flèches scrollent la page
-      // Le clavier reprend la main : c'est le curseur clavier qu'on diffuse.
-      view.pointer = null;
+      // Le clavier reprend la main : c'est le curseur clavier qu'on diffuse,
+      // et qu'on affiche.
+      showCursor();
       view.cursor.x = Math.min(n - 1, Math.max(0, view.cursor.x + dx));
       view.cursor.y = Math.min(n - 1, Math.max(0, view.cursor.y + dy));
       // la vue suit le curseur, avec 2 cases de marge par rapport au bord

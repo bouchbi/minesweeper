@@ -2,7 +2,6 @@ import {
   BONUS_DISCO,
   BONUS_HEART,
   BONUS_NONE,
-  BONUS_PROBE,
   BONUS_SHIELD,
   COVERED,
   DEFUSED,
@@ -278,19 +277,19 @@ export const BONUS_EVERY = 150;
  *  nombre de mines, pas la taille de la carte : sans ce plafond, une grande
  *  carte peu minée (qui se résout presque seule) croulerait sous les bonus. */
 export const BONUS_PER_MINES = 40;
-/** Côté du carré révélé par la sonde : 2 → 5×5. */
-export const PROBE_RADIUS = 2;
-/** Côté du carré découvert par le bouclier : 1 → 3×3. */
-export const SHIELD_RADIUS = 1;
+/** Rayon du losange découvert par le bouclier, en distance de Manhattan :
+ *  2 → 13 cases, 4 de diagonale d'une pointe à l'autre. Un losange plutôt
+ *  qu'un carré : ses pointes vont plus loin dans les quatre directions, ce
+ *  qui ouvre des coins plus faciles à reprendre. */
+export const SHIELD_RADIUS = 2;
 /** Zones vides ouvertes par une boule à facettes. */
 export const DISCO_ZONES = 4;
 
 /** Répartition des bonus tirés, en poids relatifs. */
 const BONUS_WEIGHTS: readonly (readonly [number, number])[] = [
-  [BONUS_PROBE, 40],
+  [BONUS_SHIELD, 55],
   [BONUS_HEART, 25],
   [BONUS_DISCO, 20],
-  [BONUS_SHIELD, 15],
 ];
 const BONUS_WEIGHT_TOTAL = BONUS_WEIGHTS.reduce((t, [, w]) => t + w, 0);
 
@@ -362,42 +361,22 @@ export function defuse(board: Board, i: number): number {
   return prev;
 }
 
-/** Appelle `fn` pour chaque case du carré de rayon `r` centré sur `i`. */
-function forEachInSquare(n: number, i: number, r: number, fn: (j: number) => void): void {
+/** Appelle `fn` pour chaque case du losange de rayon `r` (distance de
+ *  Manhattan) centré sur `i`, en ignorant ce qui dépasse du plateau. */
+export function forEachInDiamond(n: number, i: number, r: number, fn: (j: number) => void): void {
   const x = i % n;
   const y = (i / n) | 0;
-  const x0 = Math.max(0, x - r);
-  const x1 = Math.min(n - 1, x + r);
-  const y0 = Math.max(0, y - r);
-  const y1 = Math.min(n - 1, y + r);
-  for (let yy = y0; yy <= y1; yy++) {
+  for (let dy = -r; dy <= r; dy++) {
+    const yy = y + dy;
+    if (yy < 0 || yy >= n) continue;
+    const w = r - Math.abs(dy);
     const row = yy * n;
-    for (let xx = x0; xx <= x1; xx++) fn(row + xx);
+    for (let xx = Math.max(0, x - w); xx <= Math.min(n - 1, x + w); xx++) fn(row + xx);
   }
 }
 
 /**
- * Sonde : désamorce toutes les mines du carré 5×5 autour de `i`. Les cases
- * sûres restent telles quelles — la sonde donne l'information, le joueur
- * garde la déduction.
- *
- * @param outDefused reçoit les mines désamorcées
- * @returns le nombre de drapeaux absorbés (posés sur des mines désormais
- *          désamorcées)
- */
-export function probe(board: Board, i: number, outDefused: number[]): number {
-  let flagsTaken = 0;
-  forEachInSquare(board.n, i, PROBE_RADIUS, (j) => {
-    const prev = defuse(board, j);
-    if (prev === -1) return;
-    outDefused.push(j);
-    if (prev === FLAGGED) flagsTaken++;
-  });
-  return flagsTaken;
-}
-
-/**
- * Bouclier, première moitié : désamorce les mines du carré 3×3 autour de `i`
+ * Bouclier, première moitié : désamorce les mines du losange autour de `i`
  * et retire les drapeaux posés à tort sur des cases sûres.
  *
  * La révélation des cases sûres est laissée à l'appelant, via `reveal` : il
@@ -410,7 +389,7 @@ export function probe(board: Board, i: number, outDefused: number[]): number {
 export function shield(board: Board, i: number, outDefused: number[], outSafe: number[]): number {
   const { mines, state, flagOwner } = board;
   let flagsTaken = 0;
-  forEachInSquare(board.n, i, SHIELD_RADIUS, (j) => {
+  forEachInDiamond(board.n, i, SHIELD_RADIUS, (j) => {
     if (mines[j]) {
       const prev = defuse(board, j);
       if (prev === -1) return;

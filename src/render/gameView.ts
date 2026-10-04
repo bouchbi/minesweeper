@@ -8,8 +8,9 @@ import { createViewport, type Viewport } from './viewport';
  *
  * Les consommateurs s'abonnent via `subscribe` et redessinent eux-mêmes.
  */
-/** Surbrillance éphémère d'un rectangle de cases (bonus ramassé, objet posé). */
-export type Flash = { x0: number; y0: number; x1: number; y1: number; t0: number; color: string };
+/** Surbrillance éphémère autour de la case (x, y) : carré ou losange de rayon
+ *  `r` (0 = la case seule). */
+export type Flash = { x: number; y: number; r: number; diamond: boolean; t0: number; color: string };
 
 /** Durée d'un flash, en ms. */
 export const FLASH_MS = 900;
@@ -17,6 +18,10 @@ export const FLASH_MS = 900;
 export type GameView = {
   vp: Viewport;
   cursor: { x: number; y: number };
+  /** Le joueur pilote au clavier : le curseur clavier n'est dessiné que dans
+   *  ce cas. À la souris il suivrait chaque clic et resterait affiché sur la
+   *  dernière case touchée, sans rien signifier. */
+  keyboard: boolean;
   /** Taille du canvas de jeu en px CSS. Tenue à jour par GameCanvas, lue par
    *  la minimap pour tracer le rectangle de viewport. */
   canvas: { w: number; h: number };
@@ -45,6 +50,7 @@ export function createGameView(n: number): GameView {
   const view: GameView = {
     vp: createViewport(n),
     cursor: { x: (n / 2) | 0, y: (n / 2) | 0 },
+    keyboard: true,
     canvas: { w: 0, h: 0 },
     boardVersion: 0,
     pointer: null,

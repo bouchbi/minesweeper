@@ -250,7 +250,7 @@ export class NetworkSession implements Session {
     this.config = config;
     this.board = createBoard(config.n, config.mineCount);
     this.remaining = this.board.mineCount;
-    this.inventory = config.bonus ? { lives: 0, probes: 0, shields: 0 } : null;
+    this.inventory = config.bonus ? { lives: 0, shields: 0 } : null;
     this.peers = [];
     this.stampClock(0, false);
   }

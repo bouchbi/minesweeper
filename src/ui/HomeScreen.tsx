@@ -214,7 +214,7 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
               <button type="button" className="preset" onClick={() => onStart(TEST_CONFIG)}>
                 <strong>Test des bonus</strong>
                 <span className="mono">20×20 · 50 bombes</span>
-                <small>2 bonus de chaque, en bordure de la première zone ouverte</small>
+                <small>2 bonus de chaque type, en bordure de la première zone ouverte</small>
               </button>
             </div>
           </>
@@ -258,8 +258,8 @@ export function BonusToggle({
       <span>
         <strong>Bonus</strong>
         <small>
-          Sondes, boucliers, vies et boules à facettes cachés sous des cases sûres. Conseillé sur
-          les grandes cartes.
+          Boucliers, vies et boules à facettes cachés sous des cases sûres. Conseillé sur les
+          grandes cartes.
         </small>
       </span>
     </label>

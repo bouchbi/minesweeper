@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BONUS_DISCO, BONUS_HEART, BONUS_PROBE, BONUS_SHIELD } from '../game/board';
+import { BONUS_DISCO, BONUS_HEART, BONUS_SHIELD } from '../game/board';
 import { MAX_LIVES } from '../game/engine';
 import type { Session } from '../game/session';
 import type { GameView } from '../render/gameView';
@@ -75,22 +75,20 @@ export function ViewReadout({ view }: { view: GameView }) {
   return <span className="readout mono">{text}</span>;
 }
 
-/** Nom d'un bonus avec son article, pour les messages (« a trouvé une Sonde »). */
+/** Nom d'un bonus avec son article, pour les messages (« a trouvé un Bouclier »). */
 export const BONUS_LABEL: Record<number, string> = {
-  [BONUS_PROBE]: 'une Sonde',
   [BONUS_SHIELD]: 'un Bouclier',
   [BONUS_HEART]: 'une Vie',
   [BONUS_DISCO]: 'une Boule à facettes',
 };
 
 export const ITEM_LABEL: Record<Item, string> = {
-  probe: 'une Sonde',
   shield: 'un Bouclier',
 };
 
 /**
  * Vies et objets en réserve. Un objet se sélectionne ici ou au clavier
- * (1 / 2), puis se pose d'un clic sur le plateau.
+ * (touche 1), puis se pose d'un clic sur le plateau.
  */
 export function InventoryBar({
   inventory,
@@ -103,10 +101,9 @@ export function InventoryBar({
   enabled: boolean;
   onArm: (item: Item | null) => void;
 }) {
-  const { lives, probes, shields } = inventory;
+  const { lives, shields } = inventory;
   const items: [Item, string, number, string, string][] = [
-    ['probe', '🔍', probes, '1', "Sonde : révèle les mines d'un carré 5×5"],
-    ['shield', '🛡', shields, '2', 'Bouclier : découvre sans risque un carré 3×3'],
+    ['shield', '🛡', shields, '1', 'Bouclier : découvre sans risque un losange de 4 cases de diagonale'],
   ];
   return (
     <div className="inventory">
