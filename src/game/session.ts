@@ -1,8 +1,8 @@
-import { COVERED, createBoard, type Board } from './board';
-import { computeAdjacency, placeMines, reveal, revealAllMines, toggleFlag } from './rules';
-import type { Peer, PlayerId, PlayerInfo, Rect } from '../../shared/protocol';
+import type { Board } from './board';
+import { GameEngine, type ActionResult, type GameConfig } from './engine';
+import type { GameEvent, Inventory, Item, Peer, PlayerId, PlayerInfo, Rect } from '../../shared/protocol';
 
-export type GameConfig = { n: number; mineCount: number };
+export type { GameConfig };
 export type Over = null | 'dead' | 'won';
 export type Connection = 'local' | 'connecting' | 'online' | 'lost';
 
@@ -17,6 +17,8 @@ export interface Session {
   readonly board: Board;
   readonly over: Over;
   readonly remaining: number | null;
+  /** Vies et objets en réserve ; null quand la partie se joue sans bonus. */
+  readonly inventory: Inventory | null;
   /** Vide en solo : le HUD n'affiche la liste que s'il y a du monde. */
   readonly players: PlayerInfo[];
   readonly peers: Peer[];
@@ -28,6 +30,8 @@ export interface Session {
   elapsedMs(): number;
   reveal(i: number): void;
   flag(i: number): void;
+  /** Pose un objet de la réserve sur la case `i`. */
+  use(item: Item, i: number): void;
   moveCursor(x: number, y: number, view: Rect): void;
   /** Le plateau a changé : redessiner le canvas. Renvoie le désabonnement. */
   subscribeBoard(fn: () => void): () => void;
@@ -37,17 +41,22 @@ export interface Session {
    *  la présence change 10 fois par seconde et ne doit surtout pas invalider
    *  le cache de la minimap, qui se reconstruit en O(n²). */
   subscribePresence(fn: () => void): () => void;
+  /** Bonus ramassés, objets posés, vies perdues : messages et flashs. */
+  subscribeEvents(fn: (events: GameEvent[]) => void): () => void;
+  /** Cases ouvertes par l'action dont les événements sont en cours de
+   *  diffusion. Valable seulement pendant les rappels de `subscribeEvents` :
+   *  c'est ce qui permet de retrouver les cases d'une zone de boule à
+   *  facettes sans les confondre avec celles déjà ouvertes avant. */
+  readonly lastOpened: ArrayLike<number>;
   dispose(): void;
 }
 
 /**
- * Partie solo. Reprend exactement la logique qui vivait dans `GameScreen`,
- * y compris le premier clic sûr et le garde sur les cases non couvertes.
+ * Partie solo : les règles vivent dans `GameEngine`, la session n'ajoute que
+ * le chrono et les notifications.
  */
 export class LocalSession implements Session {
-  readonly board: Board;
-  over: Over = null;
-  remaining: number | null;
+  private readonly engine: GameEngine;
   readonly players: PlayerInfo[] = [];
   readonly peers: Peer[] = [];
   readonly selfId = 0;
@@ -57,6 +66,7 @@ export class LocalSession implements Session {
 
   private boardListeners = new Set<() => void>();
   private stateListeners = new Set<() => void>();
+  private eventListeners = new Set<(events: GameEvent[]) => void>();
 
   subscribeBoard(fn: () => void): () => void {
     this.boardListeners.add(fn);
@@ -70,6 +80,10 @@ export class LocalSession implements Session {
     // Personne d'autre en solo : rien ne sera jamais émis.
     return () => {};
   }
+  subscribeEvents(fn: (events: GameEvent[]) => void): () => void {
+    this.eventListeners.add(fn);
+    return () => this.eventListeners.delete(fn);
+  }
   private emitBoard(): void {
     for (const fn of this.boardListeners) fn();
   }
@@ -77,15 +91,25 @@ export class LocalSession implements Session {
     for (const fn of this.stateListeners) fn();
   }
 
-  /** placeMines/computeAdjacency ne tournent qu'au premier reveal, pour que la
-   *  première case cliquée puisse être garantie sans mine. */
-  private seeded = false;
   private startedAt: number | null = null;
   private stoppedAt: number | null = null;
+  lastOpened: ArrayLike<number> = [];
 
   constructor(config: GameConfig) {
-    this.board = createBoard(config.n, config.mineCount);
-    this.remaining = this.board.mineCount;
+    this.engine = new GameEngine(config);
+  }
+
+  get board(): Board {
+    return this.engine.board;
+  }
+  get over(): Over {
+    return this.engine.over;
+  }
+  get remaining(): number {
+    return this.engine.remaining;
+  }
+  get inventory(): Inventory | null {
+    return this.engine.inventory;
   }
 
   elapsedMs(): number {
@@ -100,44 +124,40 @@ export class LocalSession implements Session {
     this.emitState();
   }
 
-  private finish(over: Exclude<Over, null>): void {
-    this.over = over;
-    this.stoppedAt = performance.now();
-    this.clockRunning = false;
-    this.emitState();
-  }
-
+  /** Une case déjà révélée ou drapeautée renvoie null : elle ne consomme ni
+   *  le chrono ni la garantie de premier clic sûr. */
   reveal(i: number): void {
-    if (this.over) return;
-    // Une case déjà révélée ou drapeautée ne doit consommer ni le chrono ni la
-    // garantie de premier clic sûr : sans ce garde, un « r » sur une case
-    // drapeautée sèmerait le plateau autour d'elle sans rien révéler, et le
-    // premier vrai reveal, ailleurs, pourrait tomber sur une mine.
-    if (this.board.state[i] !== COVERED) return;
-    if (!this.seeded) {
-      this.seeded = true;
-      placeMines(this.board, i);
-      computeAdjacency(this.board);
-    }
+    const result = this.engine.reveal(i);
+    if (!result) return;
     this.startClock();
-    const outcome = reveal(this.board, i);
-    if (outcome === 'boom') {
-      revealAllMines(this.board);
-      this.finish('dead');
-    } else if (outcome === 'win') {
-      this.finish('won');
-    }
-    this.emitBoard();
+    this.apply(result);
   }
 
   flag(i: number): void {
-    if (this.over) return;
+    if (this.engine.over) return;
     this.startClock();
-    const delta = toggleFlag(this.board, i);
-    if (delta === 0) return;
-    if (this.remaining !== null) this.remaining -= delta;
+    if (this.engine.flag(i) === 0) return;
     this.emitBoard();
     this.emitState();
+  }
+
+  use(item: Item, i: number): void {
+    const result = this.engine.use(item, i);
+    if (result) this.apply(result);
+  }
+
+  private apply(result: ActionResult): void {
+    if (result.outcome) {
+      this.stoppedAt = performance.now();
+      this.clockRunning = false;
+    }
+    if (result.events.length > 0) {
+      this.lastOpened = result.opened;
+      for (const fn of this.eventListeners) fn(result.events);
+      this.lastOpened = [];
+    }
+    if (result.outcome || result.inventoryChanged) this.emitState();
+    this.emitBoard();
   }
 
   moveCursor(): void {

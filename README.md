@@ -32,6 +32,12 @@ du projet ne fait que les lire.
 | `reveal(board, i)` | révèle + cascade ; renvoie `'ok' \| 'boom' \| 'win' \| 'noop'` |
 | `toggleFlag(board, i)` | `COVERED` ↔ `FLAGGED` ; renvoie `-1 \| 0 \| 1` |
 | `revealAllMines(board)` | découvre les mines après un `'boom'` |
+| `placeBonuses(board, safeIndex)` | cache les bonus sous des cases sûres |
+| `defuse` / `shield` / `randomOpening` | effets des bonus (voir plus bas) |
+
+L'orchestration d'une partie (premier clic, vies, réserve, fin de partie) vit
+dans `GameEngine` ([`src/game/engine.ts`](src/game/engine.ts)), pur lui aussi :
+le solo l'appelle directement, le serveur l'appelle puis diffuse le résultat.
 
 Choix notables :
 
@@ -62,16 +68,19 @@ Choix notables :
 
 ### Le modèle
 
-Trois `Uint8Array` plates indexées `i = y * n + x` (3 octets par case) :
+Des `Uint8Array` plates indexées `i = y * n + x` (5 octets par case) :
 
 ```ts
 type Board = {
   n: number;             // largeur = hauteur
   mineCount: number;
   mines: Uint8Array;     // 0 | 1
-  state: Uint8Array;     // COVERED=0 | REVEALED=1 | FLAGGED=2
+  state: Uint8Array;     // COVERED=0 | REVEALED=1 | FLAGGED=2 | DEFUSED=3
   adj: Uint8Array;       // 0..8
+  bonus: Uint8Array;     // BONUS_* caché sous la case, 0 une fois ramassé
+  flagOwner: Uint8Array; // poseur du drapeau (co-op)
   revealedCount: number; // pour la détection de victoire
+  minesExposed: boolean;
 };
 ```
 
@@ -82,7 +91,7 @@ type Board = {
 
 | | |
 |---|---|
-| flèches | déplacer le curseur (la vue suit) |
+| flèches | déplacer le curseur (la vue suit ; masqué dès qu'on joue à la souris) |
 | maj + flèches | sauter de 10 cases |
 | `r` / `f` | révéler / drapeau |
 | molette, `+` / `-` | zoom (centré sur le pointeur pour la molette) |
@@ -90,11 +99,68 @@ type Board = {
 | `0` | vue globale |
 | clic gauche / droit | révéler / drapeau |
 | clic ou glisser sur la minimap | téléporter la vue |
-| échap | quitter la partie |
+| `1` | armer le Bouclier (bonus activés) |
+| échap | annuler l'objet armé, sinon quitter la partie |
 
 En fin de partie, **Rejouer** relance la même carte immédiatement et **Changer
 de carte** revient à l'accueil. Les derniers paramètres joués sont mémorisés
 (localStorage) et repré-remplissent l'accueil au prochain lancement.
+
+## Bonus
+
+Option **Bonus** à l'accueil (ou dans le lobby pour l'hôte), désactivée par
+défaut : le démineur classique reste intact. Sur les grandes cartes, une partie
+finit toujours par buter sur des situations où il faut deviner ; les bonus
+servent à s'en sortir.
+
+Ils sont cachés sous des cases sûres et ramassés en les découvrant, cascade
+comprise :
+
+| Bonus | Effet |
+|---|---|
+| 🛡 **Bouclier** | en réserve ; découvre sans risque un losange de 4 cases de diagonale (13 cases : cases sûres révélées, mines désamorcées, drapeaux faux retirés). Un losange plutôt qu'un carré : ses pointes ouvrent des coins plus faciles à reprendre. |
+| ♥ **Vie** | immédiate, 3 au maximum ; une mine touchée est désamorcée au lieu de faire perdre. |
+| 🪩 **Boule à facettes** | immédiate ; ouvre 4 zones vides au hasard sur la carte : de nouveaux fronts quand on tourne en rond. |
+
+On pose le bouclier en l'armant (bouton du HUD ou touche `1`), puis d'un
+clic, ou avec `r`, sur la case visée. La zone couverte s'affiche sous le
+curseur. Une mine **désamorcée** s'affiche sur fond sarcelle, compte comme un
+drapeau au compteur de bombes et ne peut plus être drapeautée.
+
+Une vie ou un bouclier ramassé jaillit de sa case, grossit au centre du plateau
+en tournoyant (à la façon du totem d'immortalité de Minecraft), puis file se
+ranger dans sa case du HUD ; plusieurs ramassages d'un coup s'enchaînent.
+
+La boule à facettes s'anime à la façon de la bombe de couleur de Candy Crush :
+elle grossit sur sa case en tournant et lance un trait blanc vers chaque zone
+qu'elle ouvre. Une zone ne se dévoile qu'à l'arrivée de son trait ; les traits
+s'effacent, puis la boule. Le moteur a ouvert les zones d'un coup : pendant
+l'animation, leurs cases sont seulement **voilées** à l'affichage (plateau et
+minimap), et un bonus caché dans une zone n'apparaît qu'une fois celle-ci
+dévoilée. En co-op, le serveur envoie les événements avant la trame des cases,
+et le client applique les deux ensemble : aucune image ne montre les zones
+avant le voile.
+
+Un journal façon chat, en bas à gauche, garde la trace des événements quelques
+secondes, avec le nom du joueur dans sa couleur en co-op. Avec « réduire les
+animations » activé dans le système, seule la case du HUD réagit et les zones
+s'ouvrent sans attendre.
+
+Dosage : au plus un bonus pour 120 cases sûres **et** un pour 30 mines (les
+devinettes suivent le nombre de mines, pas la taille de la carte). Répartition :
+Bouclier 55 %, Vie 25 %, Boule à facettes 20 %. Le premier clic ne
+ramasse rien : sa cascade est gratuite, et sur une carte peu minée elle viderait
+la carte de ses bonus d'un seul coup.
+
+**Carte de test** : en développement (`npm run dev`), ou sur n'importe quel
+déploiement avec `?test` dans l'URL, l'accueil propose « Test des bonus » : une
+20×20 en solo avec 2 bonus de chaque type, placés après le premier clic en
+bordure de la zone ouverte.
+
+En co-op, la réserve est **commune** à la salle. Les bonus restent secrets
+comme les mines : un client n'apprend l'existence d'un bonus qu'au moment où
+il est ramassé, et une mine désamorcée est la seule position de mine publiée
+avant la fin de partie.
 
 ## Comment ça tient à 1 M de cases
 

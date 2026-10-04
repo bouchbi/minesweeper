@@ -24,10 +24,34 @@ export type PlayerInfo = {
 
 export type Phase = 'lobby' | 'playing' | 'dead' | 'won';
 
-export type NetConfig = { n: number; mineCount: number };
+export type NetConfig = { n: number; mineCount: number; bonus: boolean };
 
 /** Carte proposée à l'ouverture d'une salle, tant que l'hôte n'a rien choisi. */
-export const DEFAULT_NET_CONFIG: NetConfig = { n: 30, mineCount: 150 };
+export const DEFAULT_NET_CONFIG: NetConfig = { n: 30, mineCount: 150, bonus: false };
+
+/* ── Bonus ──────────────────────────────────────────────────────────── */
+
+/** Objets qu'on garde en réserve et qu'on pose sur la case de son choix. */
+export type Item = 'shield';
+export const ITEMS: readonly Item[] = ['shield'];
+
+/** Réserve de la partie. En co-op elle est commune à toute la salle. */
+export type Inventory = { lives: number; shields: number };
+
+/**
+ * Ce qui vient de se passer, pour le HUD (messages) et le plateau (flash).
+ * `by` est le joueur à l'origine de l'action, 0 en solo.
+ */
+export type GameEvent =
+  /** Bonus ramassé en découvrant la case `i` (valeur BONUS_* de board.ts). */
+  | { kind: 'pickup'; bonus: number; i: number; by: PlayerId }
+  /** Zone vide ouverte à partir de la case `i` par la boule à facettes
+   *  ramassée en `from`. */
+  | { kind: 'zone'; i: number; from: number; by: PlayerId }
+  /** Mine `i` touchée, rattrapée par une vie. */
+  | { kind: 'life'; i: number; by: PlayerId }
+  /** Objet posé sur la case `i`. */
+  | { kind: 'use'; item: Item; i: number; by: PlayerId };
 
 /**
  * Code de salle : plusieurs groupes partagent le même serveur, chacun dans sa
@@ -61,12 +85,17 @@ export type ClientMessage =
   | { t: 'reveal'; i: number }
   | { t: 'flag'; i: number }
   | { t: 'cursor'; x: number; y: number; view: Rect }
+  | { t: 'use'; item: Item; i: number }
   | { t: 'restart' }
   /** L'hôte ramène tout le monde au lobby pour choisir une autre carte. */
   | { t: 'lobby' };
 
 export type ServerMessage =
   | { t: 'welcome'; selfId: PlayerId; players: PlayerInfo[]; phase: Phase; config: NetConfig; elapsedMs: number }
+  /** Réserve et compteur de bombes, envoyés à chaque changement et à l'arrivée
+   *  d'un joueur en cours de partie. `inventory` est null sans bonus. */
+  | { t: 'inventory'; inventory: Inventory | null; remaining: number }
+  | { t: 'events'; events: GameEvent[] }
   | { t: 'players'; players: PlayerInfo[] }
   | { t: 'config'; config: NetConfig }
   | { t: 'started' }
@@ -244,12 +273,39 @@ function readDigits(r: ByteReader, adj: Uint8Array): void {
   }
 }
 
+/* ── Mines désamorcées ───────────────────────────────────────────────── */
+
+/**
+ * Liste d'index triés, en écarts varint. Une mine désamorcée est publique par
+ * définition : c'est la seule façon dont une position de mine quitte le
+ * serveur avant la fin de partie.
+ */
+function writeIndexList(w: ByteWriter, sorted: ArrayLike<number>): void {
+  w.varint(sorted.length);
+  let prev = 0;
+  for (let k = 0; k < sorted.length; k++) {
+    w.varint(sorted[k] - prev);
+    prev = sorted[k];
+  }
+}
+
+function readIndexList(r: ByteReader, onIndex: (i: number) => void): void {
+  const count = r.varint();
+  let prev = 0;
+  for (let k = 0; k < count; k++) {
+    const i = prev + r.varint();
+    onIndex(i);
+    prev = i;
+  }
+}
+
 /* ── REVEAL ──────────────────────────────────────────────────────────── */
 
 /**
  * @param sorted  index ouverts, TRIÉS par ordre croissant
  * @param count   nombre d'entrées utiles dans `sorted`
  * @param adj     tableau d'adjacence du serveur (source des chiffres)
+ * @param defused mines passées à DEFUSED par cette action, TRIÉES
  */
 export function encodeReveal(
   sorted: Int32Array,
@@ -258,6 +314,7 @@ export function encodeReveal(
   mines: Uint8Array,
   by: PlayerId,
   revealedCount: number,
+  defused: ArrayLike<number> = [],
 ): Uint8Array {
   const w = new ByteWriter();
   w.u8(FRAME_REVEAL);
@@ -265,21 +322,35 @@ export function encodeReveal(
   w.varint(revealedCount);
   writeRuns(w, sorted, count);
   writeDigits(w, sorted, count, adj, mines);
+  // Après les séquences : une mine tout juste révélée par un 'boom' rattrapé
+  // par une vie y figure comme REVEALED, et doit finir DEFUSED.
+  writeIndexList(w, defused);
   return w.finish();
 }
 
 export type RevealDelta = { by: PlayerId; revealedCount: number; opened: number };
 
 /** Applique la trame directement dans les tableaux du plateau client. */
-export function applyReveal(data: Uint8Array, state: Uint8Array, adj: Uint8Array, REVEALED: number): RevealDelta {
+export function applyReveal(
+  data: Uint8Array,
+  state: Uint8Array,
+  adj: Uint8Array,
+  REVEALED: number,
+  DEFUSED: number,
+  onOpened?: (i: number) => void,
+): RevealDelta {
   const r = new ByteReader(data);
   r.u8(); // FRAME_REVEAL
   const by = r.u8();
   const revealedCount = r.varint();
   const opened = readRuns(r, (i) => {
     state[i] = REVEALED;
+    onOpened?.(i);
   });
   readDigits(r, adj);
+  readIndexList(r, (i) => {
+    state[i] = DEFUSED;
+  });
   return { by, revealedCount, opened };
 }
 
@@ -304,13 +375,16 @@ export function encodeSnapshot(
   revealedCount: number,
   REVEALED: number,
   FLAGGED: number,
+  DEFUSED: number,
 ): Uint8Array {
   const total = n * n;
   const revealed: number[] = [];
   const flags: number[] = [];
+  const defused: number[] = [];
   for (let i = 0; i < total; i++) {
     if (state[i] === REVEALED) { if (!mines[i]) revealed.push(i); }
     else if (state[i] === FLAGGED) flags.push(i);
+    else if (state[i] === DEFUSED) defused.push(i);
   }
   // Les cases minées révélées (après défaite) sont transmises comme état, mais
   // sans chiffre : le client les recevra via la trame MINES.
@@ -332,6 +406,7 @@ export function encodeSnapshot(
     w.u8(flagOwner[i]);
     prev = i;
   }
+  writeIndexList(w, defused);
   return w.finish();
 }
 
@@ -342,6 +417,7 @@ export function applySnapshot(
   flagOwner: Uint8Array,
   REVEALED: number,
   FLAGGED: number,
+  DEFUSED: number,
 ): { n: number; revealedCount: number } {
   const r = new ByteReader(data);
   r.u8();
@@ -362,6 +438,9 @@ export function applySnapshot(
     flagOwner[i] = r.u8();
     prev = i;
   }
+  readIndexList(r, (i) => {
+    state[i] = DEFUSED;
+  });
   return { n, revealedCount };
 }
 

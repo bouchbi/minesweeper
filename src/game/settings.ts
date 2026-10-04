@@ -2,7 +2,7 @@ import { MAX_N, MIN_N } from './presets';
 
 const KEY = 'minesweeper:last-config';
 
-export type StoredConfig = { n: number; mineCount: number };
+export type StoredConfig = { n: number; mineCount: number; bonus: boolean };
 
 /**
  * Derniers paramètres joués, pour les represélectionner à l'accueil.
@@ -18,13 +18,14 @@ export function loadLastConfig(): StoredConfig | null {
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
-    const { n, mineCount } = parsed as Partial<StoredConfig>;
+    const { n, mineCount, bonus } = parsed as Partial<StoredConfig>;
     // Revalidé à la lecture : le stockage peut avoir été écrit par une version
     // antérieure, ou édité à la main.
     if (!Number.isInteger(n) || !Number.isInteger(mineCount)) return null;
     if (n! < MIN_N || n! > MAX_N) return null;
     if (mineCount! < 1 || mineCount! >= n! * n!) return null;
-    return { n: n!, mineCount: mineCount! };
+    // Absent des configurations enregistrées avant l'arrivée des bonus.
+    return { n: n!, mineCount: mineCount!, bonus: bonus === true };
   } catch {
     return null;
   }

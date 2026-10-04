@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { idx, type Board } from '../game/board';
+import type { Item } from '../../shared/protocol';
 import { drawGrid } from '../render/drawGrid';
 import type { GameView } from '../render/gameView';
 import {
@@ -18,6 +19,10 @@ type Props = {
   enabled: boolean;
   onReveal: (i: number) => void;
   onFlag: (i: number) => void;
+  /** Pose l'objet armé (`view.armed`) sur la case `i`. */
+  onUse: (item: Item, i: number) => void;
+  /** Arme un objet (touche 1), ou désarme avec null. */
+  onArm: (item: Item | null) => void;
   onExit: () => void;
   /** La souris a survolé une nouvelle case : diffuser la présence. */
   onPointerMove?: () => void;
@@ -28,14 +33,14 @@ const DRAG_THRESHOLD = 4;
 /** Distance parcourue par une flèche avec Shift. */
 const FAST_STEP = 10;
 
-export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onPointerMove }: Props) {
+export function GameCanvas({ board, view, enabled, onReveal, onFlag, onUse, onArm, onExit, onPointerMove }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Les handlers changent à chaque render ; les listeners, eux, sont posés une
   // seule fois et lisent toujours la dernière version via cette ref.
-  const api = useRef({ board, enabled, onReveal, onFlag, onExit, onPointerMove });
-  api.current = { board, enabled, onReveal, onFlag, onExit, onPointerMove };
+  const api = useRef({ board, enabled, onReveal, onFlag, onUse, onArm, onExit, onPointerMove });
+  api.current = { board, enabled, onReveal, onFlag, onUse, onArm, onExit, onPointerMove };
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -44,14 +49,22 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
 
     let raf = 0;
 
-    const draw = () => {
-      raf = 0;
-      const { w, h } = view.canvas;
-      if (w > 0 && h > 0) drawGrid(ctx, api.current.board, view, w, h);
-    };
     /** Redessine au prochain rAF, et une seule fois même si appelé 20×. */
     const requestDraw = () => {
       if (!raf) raf = requestAnimationFrame(draw);
+    };
+    const draw = () => {
+      raf = 0;
+      const { w, h } = view.canvas;
+      // Un flash en cours : on enchaîne les frames jusqu'à ce qu'il s'éteigne.
+      if (w > 0 && h > 0 && drawGrid(ctx, api.current.board, view, w, h)) requestDraw();
+    };
+
+    /** Action principale sur une case : poser l'objet armé, sinon révéler. */
+    const act = (i: number) => {
+      const item = view.armed;
+      if (item) api.current.onUse(item, i);
+      else api.current.onReveal(i);
     };
 
     // ── Dimensionnement (avec devicePixelRatio, sinon tout est flou) ──────
@@ -152,7 +165,19 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
 
     const onPointerDown = (e: PointerEvent) => {
       canvas.focus();
+      // La souris reprend la main : le curseur clavier ne s'affiche plus
+      // (il continue de suivre les clics, pour que les flèches reprennent
+      // au bon endroit).
+      if (view.keyboard) {
+        view.keyboard = false;
+        requestDraw();
+      }
       if (e.button === 2) {
+        // Clic droit avec un objet armé : on annule, on ne pose pas de drapeau.
+        if (view.armed) {
+          api.current.onArm(null);
+          return;
+        }
         // Pas de drapeau au milieu d'un déplacement de vue en cours.
         if (pointerId !== null || !api.current.enabled) return;
         const i = cellAt(e.clientX, e.clientY);
@@ -192,6 +217,8 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
         view.pointer = cell;
       }
       api.current.onPointerMove?.();
+      // La zone visée suit la souris.
+      if (view.armed) requestDraw();
     };
 
     const onDragMove = (e: PointerEvent) => {
@@ -224,7 +251,7 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
       const i = cellAt(e.clientX, e.clientY);
       if (i === null) return;
       moveCursorTo(i);
-      api.current.onReveal(i);
+      act(i);
       view.notify();
     };
 
@@ -249,6 +276,11 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
       const n = api.current.board.n;
       const { w, h } = view.canvas;
       const step = e.shiftKey ? FAST_STEP : 1;
+      // Le clavier reprend la main : on réaffiche son curseur.
+      const showCursor = () => {
+        view.keyboard = true;
+        view.pointer = null;
+      };
       let dx = 0;
       let dy = 0;
 
@@ -259,11 +291,20 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
         case 'ArrowRight': dx = step; break;
         case 'r': case 'R':
           e.preventDefault();
-          if (api.current.enabled) api.current.onReveal(idx(n, view.cursor.x, view.cursor.y));
+          showCursor();
+          if (api.current.enabled) act(idx(n, view.cursor.x, view.cursor.y));
           view.notify();
           return;
+        case '1': {
+          e.preventDefault();
+          if (!api.current.enabled) return;
+          const item: Item = 'shield';
+          api.current.onArm(view.armed === item ? null : item);
+          return;
+        }
         case 'f': case 'F':
           e.preventDefault();
+          showCursor();
           if (api.current.enabled) api.current.onFlag(idx(n, view.cursor.x, view.cursor.y));
           view.notify();
           return;
@@ -284,15 +325,18 @@ export function GameCanvas({ board, view, enabled, onReveal, onFlag, onExit, onP
           return;
         case 'Escape':
           e.preventDefault();
-          api.current.onExit();
+          // Échap désarme d'abord ; ce n'est qu'ensuite qu'il quitte.
+          if (view.armed) api.current.onArm(null);
+          else api.current.onExit();
           return;
         default:
           return;
       }
 
       e.preventDefault(); // sinon les flèches scrollent la page
-      // Le clavier reprend la main : c'est le curseur clavier qu'on diffuse.
-      view.pointer = null;
+      // Le clavier reprend la main : c'est le curseur clavier qu'on diffuse,
+      // et qu'on affiche.
+      showCursor();
       view.cursor.x = Math.min(n - 1, Math.max(0, view.cursor.x + dx));
       view.cursor.y = Math.min(n - 1, Math.max(0, view.cursor.y + dy));
       // la vue suit le curseur, avec 2 cases de marge par rapport au bord

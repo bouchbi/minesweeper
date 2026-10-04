@@ -8,7 +8,7 @@ import type { GameConfig } from './GameScreen';
 const HUGE_CELLS = 100_000;
 
 /** Utilisé quand rien n'a encore été joué sur cette machine. */
-const DEFAULT_CONFIG: GameConfig = { n: 100, mineCount: 2000 };
+const DEFAULT_CONFIG: GameConfig = { n: 100, mineCount: 2000, bonus: false };
 
 const presetIdFor = (n: number, mineCount: number): string | null =>
   PRESETS.find((p) => p.n === n && p.mineCount === mineCount)?.id ?? null;
@@ -19,6 +19,13 @@ function defaultServer(): string {
   if (typeof location === 'undefined') return 'localhost:8080';
   return location.port === '5173' ? `${location.hostname}:8080` : location.host;
 }
+
+/** Carte de test des bonus : visible en développement (Vite sur le 5173,
+ *  comme pour `defaultServer`), ou partout avec `?test` dans l'URL. */
+const SHOW_TEST =
+  typeof location !== 'undefined' &&
+  (location.port === '5173' || new URLSearchParams(location.search).has('test'));
+const TEST_CONFIG: GameConfig = { n: 20, mineCount: 50, bonus: true, testBonuses: true };
 
 /** Code reçu par un lien d'invitation (`/?room=abc123`). */
 function invitedRoom(): string {
@@ -44,6 +51,7 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
   const [initial] = useState(() => loadLastConfig() ?? DEFAULT_CONFIG);
   const [nText, setNText] = useState(String(initial.n));
   const [minesText, setMinesText] = useState(String(initial.mineCount));
+  const [bonus, setBonus] = useState(initial.bonus);
   const [activePreset, setActivePreset] = useState<string | null>(() =>
     presetIdFor(initial.n, initial.mineCount),
   );
@@ -83,8 +91,8 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (error) return;
-    saveLastConfig({ n, mineCount });
-    onStart({ n, mineCount });
+    saveLastConfig({ n, mineCount, bonus });
+    onStart({ n, mineCount, bonus });
   };
 
   return (
@@ -134,6 +142,8 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
               </small>
             </label>
           </div>
+
+          <BonusToggle checked={bonus} onChange={setBonus} />
 
           {error && <p className="error">{error}</p>}
           {!error && total !== null && total > HUGE_CELLS && (
@@ -197,6 +207,19 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
           </label>
         </details>
 
+        {SHOW_TEST && (
+          <>
+            <h2>Test</h2>
+            <div className="presets">
+              <button type="button" className="preset" onClick={() => onStart(TEST_CONFIG)}>
+                <strong>Test des bonus</strong>
+                <span className="mono">20×20 · 50 bombes</span>
+                <small>2 bonus de chaque type, en bordure de la première zone ouverte</small>
+              </button>
+            </div>
+          </>
+        )}
+
         <h2>Dispositions</h2>
         <div className="presets">
           {PRESETS.map((p) => (
@@ -216,5 +239,29 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Case à cocher « Bonus », partagée par l'accueil et le lobby. */
+export function BonusToggle({
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="toggle">
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>
+        <strong>Bonus</strong>
+        <small>
+          Boucliers, vies et boules à facettes cachés sous des cases sûres. Conseillé sur les
+          grandes cartes.
+        </small>
+      </span>
+    </label>
   );
 }

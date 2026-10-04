@@ -303,3 +303,95 @@ kbd {
   margin: 0 0 12px;
 }
 .invite input { flex: 1; min-width: 0; }
+
+/* ── Bonus ────────────────────────────────────────────────────────────── */
+.toggle {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 14px;
+  cursor: pointer;
+}
+.toggle input { margin-top: 3px; accent-color: var(--accent); }
+.toggle > span { display: flex; flex-direction: column; gap: 2px; }
+.toggle strong { font-size: 14px; font-weight: 600; }
+.toggle small { font-size: 12px; color: var(--muted); }
+
+.inventory { display: flex; align-items: center; gap: 8px; }
+.lives { display: inline-flex; gap: 2px; font-size: 17px; line-height: 1; }
+.lives i { font-style: normal; color: #3b4250; }
+.lives i.on { color: #f472b6; }
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.item:hover:not(:disabled) { border-color: #3b4250; }
+.item:disabled { opacity: 0.38; cursor: default; }
+.item.armed { border-color: #a78bfa; background: rgba(167, 139, 250, 0.16); }
+.item kbd { font-size: 10.5px; padding: 0 4px; color: var(--muted); }
+
+.chat {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: min(460px, calc(100% - 24px));
+  pointer-events: none;
+}
+.chat-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  background: rgba(15, 17, 21, 0.78);
+  border-left: 3px solid var(--line);
+  /* Durée posée en ligne, calée sur CHAT_LINE_MS. */
+  animation-name: chat-life;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+.chat-line > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-good { border-left-color: #4ade80; }
+.chat-bad { border-left-color: #ef4444; }
+.chat-info { border-left-color: #38bdf8; }
+.chat-icon { flex: none; }
+.chat-name { flex: none; font-weight: 600; }
+@keyframes chat-life {
+  0% { opacity: 0; transform: translateY(6px); }
+  3% { opacity: 1; transform: none; }
+  87% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-line { animation-name: none; }
+}
+
+/* Emoji de ramassage, animé par pickupFx.ts. */
+.pickup-fx {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 50;
+  font-size: 30px;
+  line-height: 1;
+  pointer-events: none;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 0 6px var(--glow)) drop-shadow(0 0 14px var(--glow));
+}
