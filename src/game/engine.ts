@@ -85,7 +85,9 @@ export class GameEngine {
   private defused: number[] = [];
   private events: GameEvent[] = [];
   private inventoryChanged = false;
-  private pendingDisco = 0;
+  /** Cases des boules à facettes ramassées pendant l'action, pas encore
+   *  déclenchées. */
+  private pendingDisco: number[] = [];
   private firstAction = false;
   private by: PlayerId = 0;
 
@@ -178,7 +180,7 @@ export class GameEngine {
     this.defused = [];
     this.events = [];
     this.inventoryChanged = false;
-    this.pendingDisco = 0;
+    this.pendingDisco = [];
     this.firstAction = false;
   }
 
@@ -212,7 +214,7 @@ export class GameEngine {
       this.inventoryChanged = true;
       if (bonus === BONUS_HEART) inv.lives = Math.min(MAX_LIVES, inv.lives + 1);
       else if (bonus === BONUS_SHIELD) inv.shields++;
-      else if (bonus === BONUS_DISCO) this.pendingDisco++;
+      else if (bonus === BONUS_DISCO) this.pendingDisco.push(i);
     }
   }
 
@@ -235,12 +237,12 @@ export class GameEngine {
   /** Boules à facettes ramassées pendant l'action. Une zone ouverte peut en
    *  contenir une autre : la boucle s'arrête quand plus rien n'est en attente. */
   private drainDisco(): void {
-    while (this.pendingDisco > 0) {
-      this.pendingDisco--;
+    for (let k = 0; k < this.pendingDisco.length; k++) {
+      const from = this.pendingDisco[k];
       for (let z = 0; z < DISCO_ZONES; z++) {
         const j = randomOpening(this.board);
         if (j < 0) break;
-        this.events.push({ kind: 'zone', i: j, by: this.by });
+        this.events.push({ kind: 'zone', i: j, from, by: this.by });
         this.open(j);
       }
     }

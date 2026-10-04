@@ -43,7 +43,9 @@ let counts: Uint16Array | null = null;
  * plus élevé gagne » donnerait une minimap saturée de rouge dès qu'un seul
  * drapeau traîne dans le bloc.
  */
-export function buildMinimap(board: Board, prev: MinimapCache | null): MinimapCache {
+/** @param veil cases voilées par une boule à facettes : comptées couvertes,
+ *  sinon la minimap dévoilerait les zones avant l'arrivée des traits. */
+export function buildMinimap(board: Board, prev: MinimapCache | null, veil: Uint8Array | null = null): MinimapCache {
   const { n, state, mines, minesExposed } = board;
   const res = Math.min(n, MINIMAP_SIZE);
   const cells = res * res;
@@ -69,7 +71,7 @@ export function buildMinimap(board: Board, prev: MinimapCache | null): MinimapCa
     for (let x = 0; x < n; x++) {
       const i = rowIn + x;
       const s = state[i];
-      if (s === COVERED) continue;
+      if (s === COVERED || (veil !== null && veil[i])) continue;
       const p = (rowOut + ((x * scale) | 0)) * 3;
       // Après une défaite, un drapeau juste compte comme une mine : la minimap
       // reste cohérente avec ce que le plateau affiche.

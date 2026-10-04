@@ -324,6 +324,11 @@ export class Room {
   private publish(engine: GameEngine, result: ActionResult, by: PlayerId): void {
     const { board } = engine;
     const { opened, defused } = result;
+    // Événements d'abord, cases ensuite : le client garde les zones de boule à
+    // facettes en attente et les voile au moment même où leurs cases arrivent
+    // (voir NetworkSession). Dans l'autre ordre, une image pourrait montrer les
+    // zones ouvertes avant que l'animation ne les cache.
+    if (result.events.length > 0) this.broadcastMsg({ t: 'events', events: result.events });
     if (opened.length > 0 || defused.length > 0) {
       const sorted = this.sortBuf.subarray(0, opened.length);
       sorted.set(opened);
@@ -333,7 +338,6 @@ export class Room {
         encodeReveal(sorted, sorted.length, board.adj, board.mines, by, board.revealedCount, sortedDefused),
       );
     }
-    if (result.events.length > 0) this.broadcastMsg({ t: 'events', events: result.events });
     if (result.inventoryChanged) this.broadcastMsg(this.inventoryMsg());
 
     if (result.outcome === 'dead') {

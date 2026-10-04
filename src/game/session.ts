@@ -43,6 +43,11 @@ export interface Session {
   subscribePresence(fn: () => void): () => void;
   /** Bonus ramassés, objets posés, vies perdues : messages et flashs. */
   subscribeEvents(fn: (events: GameEvent[]) => void): () => void;
+  /** Cases ouvertes par l'action dont les événements sont en cours de
+   *  diffusion. Valable seulement pendant les rappels de `subscribeEvents` :
+   *  c'est ce qui permet de retrouver les cases d'une zone de boule à
+   *  facettes sans les confondre avec celles déjà ouvertes avant. */
+  readonly lastOpened: ArrayLike<number>;
   dispose(): void;
 }
 
@@ -88,6 +93,7 @@ export class LocalSession implements Session {
 
   private startedAt: number | null = null;
   private stoppedAt: number | null = null;
+  lastOpened: ArrayLike<number> = [];
 
   constructor(config: GameConfig) {
     this.engine = new GameEngine(config);
@@ -145,7 +151,11 @@ export class LocalSession implements Session {
       this.stoppedAt = performance.now();
       this.clockRunning = false;
     }
-    if (result.events.length > 0) for (const fn of this.eventListeners) fn(result.events);
+    if (result.events.length > 0) {
+      this.lastOpened = result.opened;
+      for (const fn of this.eventListeners) fn(result.events);
+      this.lastOpened = [];
+    }
     if (result.outcome || result.inventoryChanged) this.emitState();
     this.emitBoard();
   }

@@ -1,6 +1,7 @@
 import { COVERED, DEFUSED, FLAGGED, type Board } from '../game/board';
 import { SHIELD_RADIUS } from '../game/rules';
 import { PLAYER_COLORS } from '../../shared/protocol';
+import { activeVeil, advanceDiscos, drawDiscos } from './discoFx';
 import { FLASH_MS, type GameView } from './gameView';
 import {
   BUCKET_ADJ0,
@@ -59,6 +60,16 @@ export function drawGrid(
   ctx.fillRect(0, 0, w, h);
   if (cell <= 0) return false;
 
+  // Boules à facettes : lever le voile des zones atteintes AVANT de classer
+  // les cases, pour qu'elles apparaissent dès cette frame.
+  const now = performance.now();
+  if (advanceDiscos(view, now)) {
+    view.boardVersion++;
+    // La minimap doit se reconstruire ; notifier hors du dessin en cours.
+    queueMicrotask(() => view.notify());
+  }
+  const veil = activeVeil(view);
+
   const r = visibleRange(vp, n, w, h);
   const originX = w / 2 - vp.cx * cell;
   const originY = h / 2 - vp.cy * cell;
@@ -71,10 +82,11 @@ export function drawGrid(
   // rien, et un fillRect par case coûte trop cher. On passe alors par un
   // ImageData d'un pixel par case, agrandi d'un coup.
   if (cell < LOD_PIXEL) {
-    drawPixels(ctx, board, r, originX, originY, cell);
+    drawPixels(ctx, board, veil, r, originX, originY, cell);
     if (view.keyboard) drawCursor(ctx, cursor, originX, originY, cell, n);
     drawAim(ctx, view, originX, originY, cell, n);
-    return drawFlashes(ctx, view, originX, originY, cell);
+    const flashing = drawFlashes(ctx, view, originX, originY, cell);
+    return drawDiscos(ctx, view, originX, originY, cell, now) || flashing;
   }
 
   const showText = cell >= LOD_TEXT;
@@ -91,7 +103,8 @@ export function drawGrid(
     const sy = originY + y * cell;
     for (let x = r.x0; x < r.x1; x++) {
       const i = row + x;
-      const s = state[i];
+      // Case voilée (zone de boule à facettes pas encore atteinte) : couverte.
+      const s = veil !== null && veil[i] ? COVERED : state[i];
       let b: number;
       if (s === COVERED) b = BUCKET_COVERED;
       else if (s === FLAGGED) {
@@ -128,7 +141,8 @@ export function drawGrid(
   drawPeerCursors(ctx, view, originX, originY, cell, n);
   if (view.keyboard) drawCursor(ctx, cursor, originX, originY, cell, n);
   drawAim(ctx, view, originX, originY, cell, n);
-  return drawFlashes(ctx, view, originX, originY, cell);
+  const flashing = drawFlashes(ctx, view, originX, originY, cell);
+  return drawDiscos(ctx, view, originX, originY, cell, now) || flashing;
 }
 
 /**
@@ -211,6 +225,7 @@ function drawFlashes(
     const t = (now - f.t0) / FLASH_MS;
     if (t >= 1) continue;
     flashes[kept++] = f;
+    if (t < 0) continue; // programmé : sa case n'est pas encore dévoilée
     const a = 1 - t;
     if (f.diamond) {
       diamondPath(ctx, originX, originY, cell, f.x, f.y, f.r);
@@ -287,6 +302,7 @@ let pxImage: ImageData | null = null;
 function drawPixels(
   ctx: CanvasRenderingContext2D,
   board: Board,
+  veil: Uint8Array | null,
   r: Range,
   originX: number,
   originY: number,
@@ -315,7 +331,7 @@ function drawPixels(
     const row = y * n;
     for (let x = r.x0; x < r.x1; x++) {
       const i = row + x;
-      const s = state[i];
+      const s = veil !== null && veil[i] ? COVERED : state[i];
       let b: number;
       if (s === COVERED) b = BUCKET_COVERED;
       else if (s === FLAGGED) b = minesExposed && mines[i] ? BUCKET_FLAGGED_MINE : BUCKET_FLAGGED;

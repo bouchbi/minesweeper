@@ -127,7 +127,26 @@ clic, ou avec `r`, sur la case visée. La zone couverte s'affiche sous le
 curseur. Une mine **désamorcée** s'affiche sur fond sarcelle, compte comme un
 drapeau au compteur de bombes et ne peut plus être drapeautée.
 
-Dosage : au plus un bonus pour 150 cases sûres **et** un pour 40 mines (les
+Une vie ou un bouclier ramassé jaillit de sa case, grossit au centre du plateau
+en tournoyant (à la façon du totem d'immortalité de Minecraft), puis file se
+ranger dans sa case du HUD ; plusieurs ramassages d'un coup s'enchaînent.
+
+La boule à facettes s'anime à la façon de la bombe de couleur de Candy Crush :
+elle grossit sur sa case en tournant et lance un trait blanc vers chaque zone
+qu'elle ouvre. Une zone ne se dévoile qu'à l'arrivée de son trait ; les traits
+s'effacent, puis la boule. Le moteur a ouvert les zones d'un coup : pendant
+l'animation, leurs cases sont seulement **voilées** à l'affichage (plateau et
+minimap), et un bonus caché dans une zone n'apparaît qu'une fois celle-ci
+dévoilée. En co-op, le serveur envoie les événements avant la trame des cases,
+et le client applique les deux ensemble : aucune image ne montre les zones
+avant le voile.
+
+Un journal façon chat, en bas à gauche, garde la trace des événements quelques
+secondes, avec le nom du joueur dans sa couleur en co-op. Avec « réduire les
+animations » activé dans le système, seule la case du HUD réagit et les zones
+s'ouvrent sans attendre.
+
+Dosage : au plus un bonus pour 120 cases sûres **et** un pour 30 mines (les
 devinettes suivent le nombre de mines, pas la taille de la carte). Répartition :
 Bouclier 55 %, Vie 25 %, Boule à facettes 20 %. Le premier clic ne
 ramasse rien : sa cascade est gratuite, et sur une carte peu minée elle viderait

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { Board } from '../game/board';
 import { buildMinimap, drawMinimap, MINIMAP_SIZE, type MinimapCache } from '../render/drawMinimap';
 import type { GameView } from '../render/gameView';
+import { activeVeil } from '../render/discoFx';
 import { clampViewport } from '../render/viewport';
 
 type Props = { board: Board; view: GameView };
@@ -34,7 +35,7 @@ export function Minimap({ board, view }: Props) {
       const now = performance.now();
       const stale = cachedVersion !== view.boardVersion;
       if (!cache || (stale && now - lastBuild >= REBUILD_INTERVAL_MS)) {
-        cache = buildMinimap(board, cache);
+        cache = buildMinimap(board, cache, activeVeil(view));
         cachedVersion = view.boardVersion;
         lastBuild = now;
         if (retry) {

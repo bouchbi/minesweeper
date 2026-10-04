@@ -58,6 +58,11 @@ export class NetworkSession implements Session {
   private stateListeners = new Set<() => void>();
   private presenceListeners = new Set<() => void>();
   private eventListeners = new Set<(events: GameEvent[]) => void>();
+  /** Cases ouvertes par la dernière trame REVEAL (voir `Session.lastOpened`). */
+  lastOpened: number[] = [];
+  /** Événements arrivés avant leur trame : ceux qui ouvrent des zones de boule
+   *  à facettes attendent les cases correspondantes. */
+  private deferredEvents: GameEvent[] = [];
 
   /** Le plateau a changé : redessiner. Plusieurs composants peuvent écouter —
    *  un créneau unique laisserait le dernier monté écraser les précédents. */
@@ -76,6 +81,9 @@ export class NetworkSession implements Session {
   subscribeEvents(fn: (events: GameEvent[]) => void): () => void {
     this.eventListeners.add(fn);
     return () => this.eventListeners.delete(fn);
+  }
+  private emitEvents(events: GameEvent[]): void {
+    for (const fn of this.eventListeners) fn(events);
   }
   private emitBoard(): void {
     for (const fn of this.boardListeners) fn();
@@ -251,6 +259,7 @@ export class NetworkSession implements Session {
     this.board = createBoard(config.n, config.mineCount);
     this.remaining = this.board.mineCount;
     this.inventory = config.bonus ? { lives: 0, shields: 0 } : null;
+    this.deferredEvents = [];
     this.peers = [];
     this.stampClock(0, false);
   }
@@ -318,7 +327,11 @@ export class NetworkSession implements Session {
         break;
 
       case 'events':
-        for (const fn of this.eventListeners) fn(msg.events);
+        // Le serveur envoie les événements AVANT la trame des cases. Une zone
+        // de boule à facettes doit être voilée dès que ses cases arrivent, sans
+        // qu'une seule image ne les montre : on l'applique avec la trame.
+        if (msg.events.some((e) => e.kind === 'zone')) this.deferredEvents.push(...msg.events);
+        else this.emitEvents(msg.events);
         break;
 
       case 'presence':
@@ -347,8 +360,16 @@ export class NetworkSession implements Session {
     const { board } = this;
     switch (bytes[0]) {
       case FRAME_REVEAL: {
-        const delta = applyReveal(bytes, board.state, board.adj, REVEALED, DEFUSED);
+        const opened: number[] = [];
+        const delta = applyReveal(bytes, board.state, board.adj, REVEALED, DEFUSED, (i) => opened.push(i));
         board.revealedCount = delta.revealedCount;
+        if (this.deferredEvents.length > 0) {
+          const events = this.deferredEvents;
+          this.deferredEvents = [];
+          this.lastOpened = opened;
+          this.emitEvents(events);
+          this.lastOpened = [];
+        }
         this.emitBoard();
         break;
       }

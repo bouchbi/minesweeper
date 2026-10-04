@@ -272,11 +272,11 @@ export function revealAllMines(board: Board): void {
    ───────────────────────────────────────────────────────────────────────── */
 
 /** Au plus un bonus pour ce nombre de cases sûres… */
-export const BONUS_EVERY = 150;
+export const BONUS_EVERY = 120;
 /** …et pour ce nombre de mines. Les situations où il faut deviner suivent le
  *  nombre de mines, pas la taille de la carte : sans ce plafond, une grande
  *  carte peu minée (qui se résout presque seule) croulerait sous les bonus. */
-export const BONUS_PER_MINES = 40;
+export const BONUS_PER_MINES = 30;
 /** Rayon du losange découvert par le bouclier, en distance de Manhattan :
  *  2 → 13 cases, 4 de diagonale d'une pointe à l'autre. Un losange plutôt
  *  qu'un carré : ses pointes vont plus loin dans les quatre directions, ce

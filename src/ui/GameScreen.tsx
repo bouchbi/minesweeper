@@ -2,19 +2,23 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { BONUS_DISCO, BONUS_HEART, BONUS_SHIELD } from '../game/board';
 import { SHIELD_RADIUS } from '../game/rules';
 import type { GameConfig, Session } from '../game/session';
+import { addBeam, clearDiscos, startDisco, zoneCells, type Disco, type DiscoBeam } from '../render/discoFx';
 import { createGameView, type GameView } from '../render/gameView';
+import { worldToScreenX, worldToScreenY } from '../render/viewport';
 import type { GameEvent, Item } from '../../shared/protocol';
 import { GameCanvas } from './GameCanvas';
 import {
   BombCounter,
   BONUS_LABEL,
+  CHAT_LINE_MS,
+  ChatLog,
+  type ChatLine,
   InventoryBar,
   ITEM_LABEL,
   Timer,
-  type Toast,
-  Toasts,
   ViewReadout,
 } from './Hud';
+import { BONUS_EMOJI, createPickupFx } from './pickupFx';
 import { Minimap } from './Minimap';
 import { PlayerList } from './PlayerList';
 
@@ -38,44 +42,58 @@ const FLASH_COLOR: Record<number, string> = {
   [BONUS_HEART]: '#f472b6',
   [BONUS_DISCO]: '#fbbf24',
 };
-const TOAST_MS = 3200;
-const MAX_TOASTS = 4;
+/** Lignes affichées au plus dans le journal. */
+const MAX_CHAT_LINES = 6;
 
-/** Ajoute à la vue le flash correspondant à un événement. */
-function flashFor(view: GameView, n: number, e: GameEvent, now: number): void {
+/** Ajoute à la vue le flash correspondant à un événement, à l'instant `t0`
+ *  (dans le futur pour une case encore voilée). Les zones de boule à facettes
+ *  ont leur propre éclat, à l'arrivée du trait (voir discoFx). */
+function flashFor(view: GameView, n: number, e: GameEvent, t0: number): void {
+  if (e.kind === 'zone') return;
   const x = e.i % n;
   const y = (e.i / n) | 0;
   let r = 0;
   let diamond = false;
   let color = '#fbbf24';
   if (e.kind === 'pickup') color = FLASH_COLOR[e.bonus] ?? color;
-  else if (e.kind === 'zone') r = 1;
   else if (e.kind === 'life') color = '#ef4444';
   else if (e.kind === 'use') {
     r = SHIELD_RADIUS;
     diamond = true;
     color = FLASH_COLOR[BONUS_SHIELD];
   }
-  view.flashes.push({ x, y, r, diamond, t0: now, color });
+  view.flashes.push({ x, y, r, diamond, t0, color });
 }
 
-/** Message du HUD pour un événement, ou null s'il n'en mérite pas. */
-function toastFor(session: Session, e: GameEvent): Omit<Toast, 'id'> | null {
-  const self = e.by === session.selfId;
-  const name = session.players.find((p) => p.id === e.by)?.name ?? 'Quelqu’un';
-  const who = self ? 'Tu as' : `${name} a`;
+const reducedMotion = () =>
+  typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * Ligne de journal pour un événement, ou null s'il n'en mérite pas.
+ * En solo la phrase est à la deuxième personne (« Tu as trouvé… ») ; en co-op
+ * elle commence par le nom du joueur, affiché à part dans sa couleur.
+ */
+function chatFor(session: Session, e: GameEvent): Omit<ChatLine, 'id'> | null {
+  const coop = session.connection !== 'local';
+  const player = session.players.find((p) => p.id === e.by);
+  const who = coop ? { name: player?.name ?? 'Quelqu’un', color: player?.color ?? 'inherit' } : null;
   switch (e.kind) {
     case 'pickup': {
       const label = BONUS_LABEL[e.bonus];
       if (!label) return null;
       const extra = e.bonus === BONUS_DISCO ? ' : des zones s’ouvrent !' : '';
-      return { text: `${who} trouvé ${label}${extra}`, tone: 'good' };
+      return { icon: BONUS_EMOJI[e.bonus], who, text: `${coop ? 'a' : 'Tu as'} trouvé ${label}${extra}`, tone: 'good' };
     }
     case 'life':
-      return { text: `${who} touché une mine — une vie perdue`, tone: 'bad' };
+      return {
+        icon: '💥',
+        who,
+        text: coop ? 'a touché une mine : une vie perdue' : 'Mine touchée : une vie perdue',
+        tone: 'bad',
+      };
     case 'use':
-      // Son propre geste se voit déjà sur le plateau.
-      return self ? null : { text: `${name} a utilisé ${ITEM_LABEL[e.item]}`, tone: 'info' };
+      // En solo, son propre geste se voit déjà sur le plateau.
+      return coop ? { icon: '🛡️', who, text: `a utilisé ${ITEM_LABEL[e.item]}`, tone: 'info' } : null;
     case 'zone':
       return null;
   }
@@ -188,32 +206,98 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
     view.notify();
   }, [armed, view]);
 
-  // ── Événements : flashs sur le plateau, messages dans le HUD ─────────
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const toastSeq = useRef(0);
+  // ── Événements : flash sur la case, animation de ramassage, journal ─
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [chat, setChat] = useState<ChatLine[]>([]);
+  const chatSeq = useRef(0);
   useEffect(() => {
+    const fx = createPickupFx();
     const timers = new Set<ReturnType<typeof setTimeout>>();
+    const later = (ms: number, fn: () => void) => {
+      if (ms <= 0) return fn();
+      const t = setTimeout(() => {
+        timers.delete(t);
+        fn();
+      }, ms);
+      timers.add(t);
+    };
+    /** Marquage des cases ouvertes par l'action en cours (voir zoneCells),
+     *  réutilisé d'un lot d'événements à l'autre. */
+    let fresh: Uint8Array | null = null;
+
+    const playPickup = (bonus: number, i: number) => {
+      const stage = boardRef.current?.getBoundingClientRect();
+      if (!stage) return;
+      // Départ au centre de la case, ramené dans le plateau si elle est hors
+      // champ (zone de boule à facettes, coéquipier à l'autre bout).
+      const n = session.board.n;
+      const { vp, canvas } = view;
+      const m = 24;
+      const x = stage.left + worldToScreenX(vp, (i % n) + 0.5, canvas.w);
+      const y = stage.top + worldToScreenY(vp, ((i / n) | 0) + 0.5, canvas.h);
+      fx.play(
+        bonus,
+        { x: Math.min(stage.right - m, Math.max(stage.left + m, x)), y: Math.min(stage.bottom - m, Math.max(stage.top + m, y)) },
+        stage,
+      );
+    };
+
     const stop = session.subscribeEvents((events) => {
       const now = performance.now();
-      const n = session.board.n;
-      const fresh: Toast[] = [];
-      for (const e of events) {
-        flashFor(view, n, e, now);
-        const t = toastFor(session, e);
-        if (t) fresh.push({ ...t, id: ++toastSeq.current });
+      const board = session.board;
+      const n = board.n;
+      const animate = !reducedMotion();
+
+      // Cases ouvertes par cette action : les zones des boules à facettes se
+      // reconstruisent à partir d'elles.
+      const opened = session.lastOpened;
+      const hasZones = animate && events.some((e) => e.kind === 'zone');
+      if (hasZones) {
+        if (!fresh || fresh.length !== n * n) fresh = new Uint8Array(n * n);
+        for (let k = 0; k < opened.length; k++) fresh[opened[k]] = 1;
       }
+      const discos = new Map<number, Disco>();
+      const beams: DiscoBeam[] = [];
+      /** Instant où la case `i` sera visible : à l'arrivée du trait de sa zone
+       *  si elle en fait partie, tout de suite sinon. */
+      const visibleAt = (i: number) => beams.find((b) => b.cells.includes(i))?.arriveAt ?? now;
+
+      const lines: ChatLine[] = [];
+      for (const e of events) {
+        const at = e.kind === 'pickup' ? visibleAt(e.i) : now;
+        if (e.kind === 'zone') {
+          if (hasZones && fresh) {
+            const d = discos.get(e.from) ?? startDisco(view, n, e.from, now);
+            discos.set(e.from, d);
+            beams.push(addBeam(view, n, d, e.i, zoneCells(board, fresh, e.i)));
+          }
+        } else {
+          flashFor(view, n, e, at);
+        }
+        if (e.kind === 'pickup') {
+          // La boule à facettes a sa propre animation ; elle démarre quand sa
+          // case apparaît (elle peut se trouver dans la zone d'une autre).
+          if (e.bonus === BONUS_DISCO) {
+            if (animate) discos.set(e.i, startDisco(view, n, e.i, at));
+          } else {
+            later(at - now, () => playPickup(e.bonus, e.i));
+          }
+        }
+        const line = chatFor(session, e);
+        if (line) lines.push({ ...line, id: ++chatSeq.current });
+      }
+      if (hasZones && fresh) for (let k = 0; k < opened.length; k++) fresh[opened[k]] = 0;
+
       view.notify();
-      if (fresh.length === 0) return;
-      setToasts((prev) => [...prev, ...fresh].slice(-MAX_TOASTS));
-      const ids = new Set(fresh.map((t) => t.id));
-      const timer = setTimeout(() => {
-        timers.delete(timer);
-        setToasts((prev) => prev.filter((t) => !ids.has(t.id)));
-      }, TOAST_MS);
-      timers.add(timer);
+      if (lines.length === 0) return;
+      setChat((prev) => [...prev, ...lines].slice(-MAX_CHAT_LINES));
+      const ids = new Set(lines.map((l) => l.id));
+      later(CHAT_LINE_MS, () => setChat((prev) => prev.filter((l) => !ids.has(l.id))));
     });
     return () => {
       stop();
+      fx.dispose();
+      clearDiscos(view);
       for (const t of timers) clearTimeout(t);
     };
   }, [session, view]);
@@ -266,7 +350,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
 
       {banner && <div className="net-banner">{banner}</div>}
 
-      <div className="board-area">
+      <div className="board-area" ref={boardRef}>
         <GameCanvas
           board={session.board}
           view={view}
@@ -279,7 +363,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
           onPointerMove={reportPresence}
         />
         <Minimap board={session.board} view={view} />
-        <Toasts toasts={toasts} />
+        <ChatLog lines={chat} />
       </div>
 
       <footer className="help mono">

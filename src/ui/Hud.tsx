@@ -109,6 +109,7 @@ export function InventoryBar({
     <div className="inventory">
       <span
         className="lives"
+        data-slot="lives"
         title={`Vies (${lives}/${MAX_LIVES}) : une mine touchée est désamorcée au lieu de faire perdre`}
       >
         {Array.from({ length: MAX_LIVES }, (_, k) => (
@@ -122,6 +123,7 @@ export function InventoryBar({
           key={item}
           type="button"
           className={`item${armed === item ? ' armed' : ''}`}
+          data-slot={item}
           disabled={!enabled || count === 0}
           title={`${help} — touche ${key}`}
           onClick={() => onArm(armed === item ? null : item)}
@@ -135,16 +137,43 @@ export function InventoryBar({
   );
 }
 
-export type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info' };
+/** Une ligne du journal. `who` est null en solo : pas de nom à afficher. */
+export type ChatLine = {
+  id: number;
+  icon: string;
+  who: { name: string; color: string } | null;
+  text: string;
+  tone: 'good' | 'bad' | 'info';
+};
 
-/** Messages éphémères en haut du plateau. */
-export function Toasts({ toasts }: { toasts: Toast[] }) {
-  if (toasts.length === 0) return null;
+/** Durée de vie d'une ligne ; elle s'efface pendant la dernière seconde
+ *  (animation CSS calée sur la même durée). */
+export const CHAT_LINE_MS = 8000;
+
+/**
+ * Journal façon chat, en bas à gauche du plateau : les lignes s'empilent, la
+ * plus récente en bas, et s'effacent d'elles-mêmes. En co-op chaque ligne
+ * commence par le nom du joueur, dans sa couleur.
+ */
+export function ChatLog({ lines }: { lines: ChatLine[] }) {
+  if (lines.length === 0) return null;
   return (
-    <div className="toasts" aria-live="polite">
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast toast-${t.tone}`}>
-          {t.text}
+    <div className="chat" aria-live="polite">
+      {lines.map((l) => (
+        <div
+          key={l.id}
+          className={`chat-line chat-${l.tone}`}
+          style={{ animationDuration: `${CHAT_LINE_MS}ms` }}
+        >
+          <span className="chat-icon" aria-hidden>
+            {l.icon}
+          </span>
+          {l.who && (
+            <b className="chat-name" style={{ color: l.who.color }}>
+              {l.who.name}
+            </b>
+          )}
+          <span>{l.text}</span>
         </div>
       ))}
     </div>

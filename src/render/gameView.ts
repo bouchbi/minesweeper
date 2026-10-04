@@ -1,4 +1,5 @@
 import type { Item, Peer, PlayerInfo } from '../../shared/protocol';
+import type { Disco } from './discoFx';
 import { createViewport, type Viewport } from './viewport';
 
 /**
@@ -39,8 +40,16 @@ export type GameView = {
   /** Objet en attente de pose : le prochain clic (ou `r`) le pose au lieu de
    *  révéler, et le rendu montre la zone qu'il couvrira. */
   armed: Item | null;
-  /** Flashs en cours. Le rendu les fait s'estomper puis les retire. */
+  /** Flashs en cours. Le rendu les fait s'estomper puis les retire. Un flash
+   *  dont `t0` est dans le futur attend son heure. */
   flashes: Flash[];
+  /** Animations de boule à facettes en cours (voir discoFx.ts). */
+  discos: Disco[];
+  /** Cases déjà ouvertes mais dessinées couvertes, le temps que le trait de
+   *  leur boule à facettes arrive. n*n, alloué au premier besoin. */
+  veil: Uint8Array | null;
+  /** Nombre de cases voilées : à 0, le rendu ne consulte pas `veil`. */
+  veilCount: number;
   listeners: Set<() => void>;
   notify(): void;
   subscribe(fn: () => void): () => void;
@@ -58,6 +67,9 @@ export function createGameView(n: number): GameView {
     players: [],
     armed: null,
     flashes: [],
+    discos: [],
+    veil: null,
+    veilCount: 0,
     listeners: new Set(),
     notify() {
       for (const fn of view.listeners) fn();

@@ -45,8 +45,9 @@ export type Inventory = { lives: number; shields: number };
 export type GameEvent =
   /** Bonus ramassé en découvrant la case `i` (valeur BONUS_* de board.ts). */
   | { kind: 'pickup'; bonus: number; i: number; by: PlayerId }
-  /** Zone vide ouverte par une boule à facettes, à partir de la case `i`. */
-  | { kind: 'zone'; i: number; by: PlayerId }
+  /** Zone vide ouverte à partir de la case `i` par la boule à facettes
+   *  ramassée en `from`. */
+  | { kind: 'zone'; i: number; from: number; by: PlayerId }
   /** Mine `i` touchée, rattrapée par une vie. */
   | { kind: 'life'; i: number; by: PlayerId }
   /** Objet posé sur la case `i`. */
@@ -336,6 +337,7 @@ export function applyReveal(
   adj: Uint8Array,
   REVEALED: number,
   DEFUSED: number,
+  onOpened?: (i: number) => void,
 ): RevealDelta {
   const r = new ByteReader(data);
   r.u8(); // FRAME_REVEAL
@@ -343,6 +345,7 @@ export function applyReveal(
   const revealedCount = r.varint();
   const opened = readRuns(r, (i) => {
     state[i] = REVEALED;
+    onOpened?.(i);
   });
   readDigits(r, adj);
   readIndexList(r, (i) => {
