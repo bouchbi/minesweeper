@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { densityPercent, MAX_N, PRESETS, validateConfig } from '../game/presets';
 import type { NetworkSession } from '../net/NetworkSession';
+import { BonusToggle } from './HomeScreen';
 import { PlayerList } from './PlayerList';
 
 /**
@@ -23,12 +24,12 @@ export function LobbyScreen({ session, code, onLeave }: Props) {
 
   // Le texte saisi est gardé tel quel (un champ vidé reste vide, et non
   // « NaN ») ; seule une configuration valide part au serveur.
-  const push = (nextNText: string, nextMinesText: string) => {
+  const push = (nextNText: string, nextMinesText: string, nextBonus = session.config.bonus) => {
     setNText(nextNText);
     setMinesText(nextMinesText);
     const nextN = Number.parseInt(nextNText, 10);
     const nextMines = Number.parseInt(nextMinesText, 10);
-    if (!validateConfig(nextN, nextMines)) session.setConfig({ n: nextN, mineCount: nextMines });
+    if (!validateConfig(nextN, nextMines)) session.setConfig({ n: nextN, mineCount: nextMines, bonus: nextBonus });
   };
 
   const copyInvite = async () => {
@@ -94,6 +95,11 @@ export function LobbyScreen({ session, code, onLeave }: Props) {
                 <small>{!error ? `densité ${densityPercent(n, mineCount).toFixed(1)} %` : ' '}</small>
               </label>
             </div>
+            <BonusToggle
+              checked={session.config.bonus}
+              disabled={!!error}
+              onChange={(v) => push(nText, minesText, v)}
+            />
             {error && <p className="error">{error}</p>}
             <div className="presets">
               {PRESETS.map((p) => (
@@ -121,7 +127,8 @@ export function LobbyScreen({ session, code, onLeave }: Props) {
         ) : (
           <p className="warn">
             {session.config.n}×{session.config.n} ·{' '}
-            {session.config.mineCount.toLocaleString('fr-FR')} bombes — en attente de l'hôte.
+            {session.config.mineCount.toLocaleString('fr-FR')} bombes
+            {session.config.bonus ? ' · bonus' : ''} — en attente de l'hôte.
           </p>
         )}
 

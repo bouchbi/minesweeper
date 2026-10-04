@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
+import { BONUS_DISCO, BONUS_HEART, BONUS_PROBE, BONUS_SHIELD } from '../game/board';
+import { MAX_LIVES } from '../game/engine';
 import type { Session } from '../game/session';
 import type { GameView } from '../render/gameView';
+import type { Inventory, Item } from '../../shared/protocol';
 
 function pad2(v: number): string {
   return v < 10 ? `0${v}` : String(v);
@@ -70,4 +73,83 @@ export function ViewReadout({ view }: { view: GameView }) {
   }, [view]);
 
   return <span className="readout mono">{text}</span>;
+}
+
+/** Nom d'un bonus avec son article, pour les messages (« a trouvé une Sonde »). */
+export const BONUS_LABEL: Record<number, string> = {
+  [BONUS_PROBE]: 'une Sonde',
+  [BONUS_SHIELD]: 'un Bouclier',
+  [BONUS_HEART]: 'une Vie',
+  [BONUS_DISCO]: 'une Boule à facettes',
+};
+
+export const ITEM_LABEL: Record<Item, string> = {
+  probe: 'une Sonde',
+  shield: 'un Bouclier',
+};
+
+/**
+ * Vies et objets en réserve. Un objet se sélectionne ici ou au clavier
+ * (1 / 2), puis se pose d'un clic sur le plateau.
+ */
+export function InventoryBar({
+  inventory,
+  armed,
+  enabled,
+  onArm,
+}: {
+  inventory: Inventory;
+  armed: Item | null;
+  enabled: boolean;
+  onArm: (item: Item | null) => void;
+}) {
+  const { lives, probes, shields } = inventory;
+  const items: [Item, string, number, string, string][] = [
+    ['probe', '🔍', probes, '1', "Sonde : révèle les mines d'un carré 5×5"],
+    ['shield', '🛡', shields, '2', 'Bouclier : découvre sans risque un carré 3×3'],
+  ];
+  return (
+    <div className="inventory">
+      <span
+        className="lives"
+        title={`Vies (${lives}/${MAX_LIVES}) : une mine touchée est désamorcée au lieu de faire perdre`}
+      >
+        {Array.from({ length: MAX_LIVES }, (_, k) => (
+          <i key={k} className={k < lives ? 'on' : ''}>
+            ♥
+          </i>
+        ))}
+      </span>
+      {items.map(([item, icon, count, key, help]) => (
+        <button
+          key={item}
+          type="button"
+          className={`item${armed === item ? ' armed' : ''}`}
+          disabled={!enabled || count === 0}
+          title={`${help} — touche ${key}`}
+          onClick={() => onArm(armed === item ? null : item)}
+        >
+          <span aria-hidden>{icon}</span>
+          <b className="mono">{count}</b>
+          <kbd>{key}</kbd>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export type Toast = { id: number; text: string; tone: 'good' | 'bad' | 'info' };
+
+/** Messages éphémères en haut du plateau. */
+export function Toasts({ toasts }: { toasts: Toast[] }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="toasts" aria-live="polite">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast toast-${t.tone}`}>
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
 }

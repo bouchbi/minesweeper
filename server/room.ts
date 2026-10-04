@@ -1,18 +1,12 @@
-import { COVERED, createBoard, type Board } from '../src/game/board';
-import {
-  computeAdjacency,
-  lastOpened,
-  placeMines,
-  reveal,
-  revealAllMines,
-  toggleFlag,
-} from '../src/game/rules';
+import { DEFUSED, FLAGGED, REVEALED } from '../src/game/board';
+import { GameEngine, type ActionResult } from '../src/game/engine';
 import { MAX_N, MIN_N } from '../src/game/presets';
 import {
   DEFAULT_NET_CONFIG,
   encodeMines,
   encodeReveal,
   encodeSnapshot,
+  ITEMS,
   MAX_PLAYERS,
   PLAYER_COLORS,
   type ClientMessage,
@@ -24,7 +18,6 @@ import {
   type Rect,
   type ServerMessage,
 } from '../shared/protocol';
-import { REVEALED, FLAGGED } from '../src/game/board';
 
 /** Cadence maximale de diffusion de la présence. */
 const PRESENCE_MS = 100;
@@ -56,15 +49,13 @@ export class Room {
   private clients = new Map<PlayerId, Connection>();
   private config: NetConfig = DEFAULT_NET_CONFIG;
   private phase: Phase = 'lobby';
-  private board: Board | null = null;
-  private flagOwner = new Uint8Array(0);
-  private seeded = false;
+  /** Règles, plateau et réserve commune de la salle. null au lobby. */
+  private engine: GameEngine | null = null;
   private startedAt: number | null = null;
   private stoppedAt: number | null = null;
-  private remaining = 0;
 
-  /** Tampon de tri réutilisé : `lastOpened()` sort en ordre BFS, l'encodage
-   *  RLE a besoin d'index croissants. */
+  /** Tampon de tri réutilisé : les cases ouvertes sortent en ordre BFS,
+   *  l'encodage RLE a besoin d'index croissants. */
   private sortBuf = new Int32Array(0);
 
   private presenceDirty = false;
@@ -146,9 +137,7 @@ export class Room {
   /** Ramène la salle au lobby : la configuration reste, le plateau disparaît. */
   private toLobby(): void {
     this.phase = 'lobby';
-    this.board = null;
-    this.flagOwner = new Uint8Array(0);
-    this.seeded = false;
+    this.engine = null;
     this.startedAt = null;
     this.stoppedAt = null;
     // Les déconnectés n'étaient gardés que pour préserver leurs drapeaux le
@@ -225,12 +214,17 @@ export class Room {
           config: this.config,
           elapsedMs: this.elapsedMs(),
         });
-        if (this.phase !== 'lobby' && this.board) {
+        if (this.phase !== 'lobby' && this.engine) {
+          const { board } = this.engine;
           conn.send(this.snapshot());
           // Sans ça, un joueur qui arrive ou se reconnecte après la défaite
           // n'a aucun moyen d'afficher les bombes : elles ne sont diffusées
           // qu'au moment du 'boom'.
-          if (this.phase === 'dead') conn.send(encodeMines(this.board.n, this.board.mines));
+          if (this.phase === 'dead') conn.send(encodeMines(board.n, board.mines));
+          // Réserve et compteur : sans ça, un joueur arrivé en cours de
+          // partie afficherait le nombre total de mines jusqu'au prochain
+          // drapeau.
+          this.send(conn, this.inventoryMsg());
         }
         this.broadcastPlayers();
         break;
@@ -266,6 +260,11 @@ export class Room {
         this.doFlag(conn, msg.i);
         break;
 
+      case 'use':
+        if (!ITEMS.includes(msg.item)) return;
+        this.doUse(conn, msg.item, msg.i);
+        break;
+
       case 'cursor': {
         // La vue est rediffusée telle quelle à tous les joueurs : on la
         // reconstruit champ par champ plutôt que de relayer un objet arbitraire.
@@ -282,14 +281,11 @@ export class Room {
   /* ── Partie ───────────────────────────────────────────────────────── */
 
   private newGame(): void {
-    const { n, mineCount } = this.config;
-    this.board = createBoard(n, mineCount);
-    this.flagOwner = new Uint8Array(n * n);
+    const { n } = this.config;
+    this.engine = new GameEngine(this.config);
     this.sortBuf = new Int32Array(n * n);
-    this.seeded = false;
     this.startedAt = null;
     this.stoppedAt = null;
-    this.remaining = this.board.mineCount;
     this.phase = 'playing';
     // Les joueurs déconnectés pendant la partie précédente sont oubliés ici.
     for (const [id, c] of [...this.clients]) if (!c.connected) this.clients.delete(id);
@@ -299,66 +295,86 @@ export class Room {
     if (this.startedAt === null) this.startedAt = Date.now();
   }
 
+  /** Moteur de la partie en cours, ou null hors phase de jeu. */
+  private playing(): GameEngine | null {
+    return this.phase === 'playing' ? this.engine : null;
+  }
+
   private doReveal(conn: Connection, i: number): void {
-    const board = this.board;
-    if (!board || this.phase !== 'playing') return;
-    if (!Number.isInteger(i) || i < 0 || i >= board.n * board.n) return;
-    // Même garde qu'en solo : une case déjà révélée ou drapeautée ne consomme
-    // ni le chrono ni la garantie de premier clic sûr.
-    if (board.state[i] !== COVERED) return;
-
-    if (!this.seeded) {
-      this.seeded = true;
-      placeMines(board, i);
-      computeAdjacency(board);
-    }
+    const engine = this.playing();
+    if (!engine) return;
+    // Index invalide, case déjà ouverte ou drapeautée : null, et comme en solo
+    // ni le chrono ni le premier clic sûr ne sont consommés.
+    const result = engine.reveal(i, conn.id);
+    if (!result) return;
     this.startClock();
+    this.publish(engine, result, conn.id);
+  }
 
-    const outcome = reveal(board, i);
-    if (outcome === 'noop') return;
+  private doUse(conn: Connection, item: (typeof ITEMS)[number], i: number): void {
+    const engine = this.playing();
+    if (!engine) return;
+    // La réserve est commune : si deux joueurs posent le dernier objet en même
+    // temps, le second message trouve la réserve vide et ne fait rien.
+    const result = engine.use(item, i, conn.id);
+    if (result) this.publish(engine, result, conn.id);
+  }
 
-    const opened = lastOpened();
-    this.sortBuf.set(opened);
-    const sorted = this.sortBuf.subarray(0, opened.length);
-    sorted.sort();
-    this.broadcast(encodeReveal(sorted, sorted.length, board.adj, board.mines, conn.id, board.revealedCount));
+  /** Diffuse le résultat d'une action à toute la salle. */
+  private publish(engine: GameEngine, result: ActionResult, by: PlayerId): void {
+    const { board } = engine;
+    const { opened, defused } = result;
+    if (opened.length > 0 || defused.length > 0) {
+      const sorted = this.sortBuf.subarray(0, opened.length);
+      sorted.set(opened);
+      sorted.sort();
+      const sortedDefused = defused.slice().sort((a, b) => a - b);
+      this.broadcast(
+        encodeReveal(sorted, sorted.length, board.adj, board.mines, by, board.revealedCount, sortedDefused),
+      );
+    }
+    if (result.events.length > 0) this.broadcastMsg({ t: 'events', events: result.events });
+    if (result.inventoryChanged) this.broadcastMsg(this.inventoryMsg());
 
-    if (outcome === 'boom') {
-      revealAllMines(board);
+    if (result.outcome === 'dead') {
       this.phase = 'dead';
       this.stoppedAt = Date.now();
-      // Les mines ne quittent le serveur qu'ici, une fois la partie finie.
+      // Les mines ne quittent le serveur qu'ici, une fois la partie finie
+      // (en dehors de celles désamorcées, publiques par définition).
       this.broadcast(encodeMines(board.n, board.mines));
-      this.broadcastMsg({ t: 'over', outcome: 'dead', by: conn.id, elapsedMs: this.elapsedMs() });
-    } else if (outcome === 'win') {
+      this.broadcastMsg({ t: 'over', outcome: 'dead', by, elapsedMs: this.elapsedMs() });
+    } else if (result.outcome === 'won') {
       this.phase = 'won';
       this.stoppedAt = Date.now();
-      this.broadcastMsg({ t: 'over', outcome: 'won', by: conn.id, elapsedMs: this.elapsedMs() });
+      this.broadcastMsg({ t: 'over', outcome: 'won', by, elapsedMs: this.elapsedMs() });
     }
   }
 
   private doFlag(conn: Connection, i: number): void {
-    const board = this.board;
-    if (!board || this.phase !== 'playing') return;
-    if (!Number.isInteger(i) || i < 0 || i >= board.n * board.n) return;
+    const engine = this.playing();
+    if (!engine) return;
+    if (!Number.isInteger(i) || i < 0 || i >= engine.board.state.length) return;
 
     this.startClock();
-    const delta = toggleFlag(board, i);
+    const delta = engine.flag(i, conn.id);
     if (delta === 0) return;
-    this.flagOwner[i] = delta === 1 ? conn.id : 0;
-    this.remaining -= delta;
     this.broadcastMsg({
       t: 'flag',
       i,
       on: delta === 1,
-      owner: this.flagOwner[i],
-      remaining: this.remaining,
+      owner: engine.board.flagOwner[i],
+      remaining: engine.remaining,
     });
   }
 
+  private inventoryMsg(): ServerMessage {
+    const engine = this.engine!;
+    return { t: 'inventory', inventory: engine.inventory, remaining: engine.remaining };
+  }
+
   private snapshot(): Uint8Array {
-    const b = this.board!;
-    return encodeSnapshot(b.n, b.state, b.adj, this.flagOwner, b.mines, b.revealedCount, REVEALED, FLAGGED);
+    const b = this.engine!.board;
+    return encodeSnapshot(b.n, b.state, b.adj, b.flagOwner, b.mines, b.revealedCount, REVEALED, FLAGGED, DEFUSED);
   }
 
   /* ── Présence ─────────────────────────────────────────────────────── */
@@ -388,7 +404,7 @@ function sanitizeConfig(c: NetConfig | null | undefined): NetConfig {
   // numérique produirait un plateau incohérent diffusé à toute la salle.
   const n = Math.max(MIN_N, Math.min(MAX_N, Math.floor(finiteOr(c?.n, DEFAULT_NET_CONFIG.n))));
   const mineCount = Math.max(1, Math.min(n * n - 1, Math.floor(finiteOr(c?.mineCount, 1))));
-  return { n, mineCount };
+  return { n, mineCount, bonus: c?.bonus === true };
 }
 
 function sanitizeRect(r: Rect | null | undefined): Rect | null {

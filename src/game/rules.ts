@@ -1,9 +1,21 @@
-import { COVERED, FLAGGED, REVEALED, type Board } from './board';
+import {
+  BONUS_DISCO,
+  BONUS_HEART,
+  BONUS_NONE,
+  BONUS_PROBE,
+  BONUS_SHIELD,
+  COVERED,
+  DEFUSED,
+  FLAGGED,
+  REVEALED,
+  forEachNeighbor,
+  type Board,
+} from './board';
 
 /**
  * Règles du jeu : les seules fonctions du projet qui mutent `board.mines`,
- * `board.state` et `board.adj`. Tout le reste (rendu, viewport, minimap, HUD)
- * se contente de lire ces tableaux.
+ * `board.state`, `board.adj` et `board.bonus`. Tout le reste (rendu,
+ * viewport, minimap, HUD) se contente de lire ces tableaux.
  */
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -223,7 +235,9 @@ export function lastOpened(): Int32Array {
 export function toggleFlag(board: Board, i: number): -1 | 0 | 1 {
   const { state } = board;
   if (i < 0 || i >= state.length) return 0;
-  if (state[i] === REVEALED) return 0;
+  // Une mine désamorcée est déjà connue : un drapeau dessus n'a pas de sens,
+  // et la repasser en FLAGGED la ferait compter deux fois au compteur.
+  if (state[i] === REVEALED || state[i] === DEFUSED) return 0;
   if (state[i] === FLAGGED) {
     state[i] = COVERED;
     return -1;
@@ -252,4 +266,223 @@ export function revealAllMines(board: Board): void {
     if (mines[i] === 1 && state[i] === COVERED) state[i] = REVEALED;
   }
   board.minesExposed = true;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Bonus
+   ───────────────────────────────────────────────────────────────────────── */
+
+/** Au plus un bonus pour ce nombre de cases sûres… */
+export const BONUS_EVERY = 150;
+/** …et pour ce nombre de mines. Les situations où il faut deviner suivent le
+ *  nombre de mines, pas la taille de la carte : sans ce plafond, une grande
+ *  carte peu minée (qui se résout presque seule) croulerait sous les bonus. */
+export const BONUS_PER_MINES = 40;
+/** Côté du carré révélé par la sonde : 2 → 5×5. */
+export const PROBE_RADIUS = 2;
+/** Côté du carré découvert par le bouclier : 1 → 3×3. */
+export const SHIELD_RADIUS = 1;
+/** Zones vides ouvertes par une boule à facettes. */
+export const DISCO_ZONES = 4;
+
+/** Répartition des bonus tirés, en poids relatifs. */
+const BONUS_WEIGHTS: readonly (readonly [number, number])[] = [
+  [BONUS_PROBE, 40],
+  [BONUS_HEART, 25],
+  [BONUS_DISCO, 20],
+  [BONUS_SHIELD, 15],
+];
+const BONUS_WEIGHT_TOTAL = BONUS_WEIGHTS.reduce((t, [, w]) => t + w, 0);
+
+function drawBonusKind(): number {
+  let r = Math.random() * BONUS_WEIGHT_TOTAL;
+  for (const [kind, w] of BONUS_WEIGHTS) {
+    if (r < w) return kind;
+    r -= w;
+  }
+  return BONUS_WEIGHTS[0][0];
+}
+
+/**
+ * Cache des bonus sous des cases sûres, après `placeMines`.
+ *
+ * Même algorithme S que les mines : une passe, tirage uniforme, compte exact,
+ * aucune allocation. Le bloc 3×3 du premier clic est épargné : sans ça, la
+ * première cascade ramasserait d'un coup tout ce qui traîne autour du départ.
+ */
+export function placeBonuses(board: Board, safeIndex: number): void {
+  const { n, mines, bonus } = board;
+  bonus.fill(BONUS_NONE);
+  const sx = safeIndex % n;
+  const sy = (safeIndex / n) | 0;
+  const spared = (x: number, y: number) => Math.abs(x - sx) <= 1 && Math.abs(y - sy) <= 1;
+
+  let candidates = 0;
+  for (let y = 0; y < n; y++) {
+    const row = y * n;
+    for (let x = 0; x < n; x++) if (!mines[row + x] && !spared(x, y)) candidates++;
+  }
+
+  let remaining = Math.round(Math.min(candidates / BONUS_EVERY, board.mineCount / BONUS_PER_MINES));
+  for (let y = 0; y < n && remaining > 0; y++) {
+    const row = y * n;
+    for (let x = 0; x < n; x++) {
+      if (mines[row + x] || spared(x, y)) continue;
+      if (Math.random() * candidates < remaining) {
+        bonus[row + x] = drawBonusKind();
+        if (--remaining === 0) break;
+      }
+      candidates--;
+    }
+  }
+}
+
+/** Ramasse le bonus de la case : le renvoie et l'efface du plateau. */
+export function takeBonus(board: Board, i: number): number {
+  const b = board.bonus[i];
+  if (b !== BONUS_NONE) board.bonus[i] = BONUS_NONE;
+  return b;
+}
+
+/**
+ * Neutralise la mine `i` : elle passe en DEFUSED, quel que soit son état
+ * (couverte, drapeautée, ou tout juste révélée par un 'boom' rattrapé par
+ * une vie).
+ *
+ * @returns l'état précédent de la case, ou -1 si ce n'est pas une mine ou
+ *          qu'elle était déjà désamorcée. L'appelant en a besoin pour tenir
+ *          son compte de drapeaux.
+ */
+export function defuse(board: Board, i: number): number {
+  const { mines, state } = board;
+  if (mines[i] !== 1 || state[i] === DEFUSED) return -1;
+  const prev = state[i];
+  state[i] = DEFUSED;
+  board.flagOwner[i] = 0;
+  return prev;
+}
+
+/** Appelle `fn` pour chaque case du carré de rayon `r` centré sur `i`. */
+function forEachInSquare(n: number, i: number, r: number, fn: (j: number) => void): void {
+  const x = i % n;
+  const y = (i / n) | 0;
+  const x0 = Math.max(0, x - r);
+  const x1 = Math.min(n - 1, x + r);
+  const y0 = Math.max(0, y - r);
+  const y1 = Math.min(n - 1, y + r);
+  for (let yy = y0; yy <= y1; yy++) {
+    const row = yy * n;
+    for (let xx = x0; xx <= x1; xx++) fn(row + xx);
+  }
+}
+
+/**
+ * Sonde : désamorce toutes les mines du carré 5×5 autour de `i`. Les cases
+ * sûres restent telles quelles — la sonde donne l'information, le joueur
+ * garde la déduction.
+ *
+ * @param outDefused reçoit les mines désamorcées
+ * @returns le nombre de drapeaux absorbés (posés sur des mines désormais
+ *          désamorcées)
+ */
+export function probe(board: Board, i: number, outDefused: number[]): number {
+  let flagsTaken = 0;
+  forEachInSquare(board.n, i, PROBE_RADIUS, (j) => {
+    const prev = defuse(board, j);
+    if (prev === -1) return;
+    outDefused.push(j);
+    if (prev === FLAGGED) flagsTaken++;
+  });
+  return flagsTaken;
+}
+
+/**
+ * Bouclier, première moitié : désamorce les mines du carré 3×3 autour de `i`
+ * et retire les drapeaux posés à tort sur des cases sûres.
+ *
+ * La révélation des cases sûres est laissée à l'appelant, via `reveal` : il
+ * doit pouvoir en suivre les cascades et les bonus ramassés.
+ *
+ * @param outDefused reçoit les mines désamorcées
+ * @param outSafe    reçoit les cases sûres encore couvertes, à révéler
+ * @returns le nombre de drapeaux retirés (sur mine comme sur case sûre)
+ */
+export function shield(board: Board, i: number, outDefused: number[], outSafe: number[]): number {
+  const { mines, state, flagOwner } = board;
+  let flagsTaken = 0;
+  forEachInSquare(board.n, i, SHIELD_RADIUS, (j) => {
+    if (mines[j]) {
+      const prev = defuse(board, j);
+      if (prev === -1) return;
+      outDefused.push(j);
+      if (prev === FLAGGED) flagsTaken++;
+      return;
+    }
+    if (state[j] === FLAGGED) {
+      state[j] = COVERED;
+      flagOwner[j] = 0;
+      flagsTaken++;
+    }
+    if (state[j] === COVERED) outSafe.push(j);
+  });
+  return flagsTaken;
+}
+
+/**
+ * Boule à facettes : choisit une case vide (adj = 0) encore couverte, au
+ * hasard sur toute la carte — la révéler ouvre une zone entière. À défaut de
+ * case vide, n'importe quelle case sûre couverte.
+ *
+ * Deux passes sans tirage par case (compter, puis aller à la k-ième) : un
+ * échantillonnage de réservoir appellerait Math.random un million de fois.
+ *
+ * @returns l'index choisi, ou -1 s'il ne reste aucune case sûre couverte.
+ */
+export function randomOpening(board: Board): number {
+  const { mines, state, adj } = board;
+  const total = mines.length;
+  for (const wantEmpty of [true, false]) {
+    let count = 0;
+    for (let j = 0; j < total; j++) {
+      if (state[j] === COVERED && !mines[j] && (!wantEmpty || adj[j] === 0)) count++;
+    }
+    if (count === 0) continue;
+    let k = Math.floor(Math.random() * count);
+    for (let j = 0; j < total; j++) {
+      if (state[j] === COVERED && !mines[j] && (!wantEmpty || adj[j] === 0) && k-- === 0) return j;
+    }
+  }
+  return -1;
+}
+
+function shuffle(a: number[]): void {
+  for (let k = a.length - 1; k > 0; k--) {
+    const j = Math.floor(Math.random() * (k + 1));
+    [a[k], a[j]] = [a[j], a[k]];
+  }
+}
+
+/**
+ * Carte de test : place exactement les bonus `kinds`, dans l'ordre, sur des
+ * cases sûres encore couvertes — en priorité en bordure de la zone déjà
+ * ouverte, pour qu'on tombe dessus dès les premières déductions. À appeler
+ * APRÈS la première révélation.
+ */
+export function placeTestBonuses(board: Board, kinds: readonly number[]): void {
+  const { n, mines, state, bonus } = board;
+  bonus.fill(BONUS_NONE);
+  const frontier: number[] = [];
+  const rest: number[] = [];
+  for (let i = 0; i < state.length; i++) {
+    if (state[i] !== COVERED || mines[i]) continue;
+    let edge = false;
+    forEachNeighbor(n, i, (j) => {
+      if (state[j] === REVEALED) edge = true;
+    });
+    (edge ? frontier : rest).push(i);
+  }
+  shuffle(frontier);
+  shuffle(rest);
+  const pool = frontier.concat(rest);
+  for (let k = 0; k < kinds.length && k < pool.length; k++) bonus[pool[k]] = kinds[k];
 }

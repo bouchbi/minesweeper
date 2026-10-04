@@ -1,4 +1,4 @@
-import { COVERED, FLAGGED, REVEALED, createBoard, type Board } from '../game/board';
+import { COVERED, DEFUSED, FLAGGED, REVEALED, createBoard, type Board } from '../game/board';
 import { revealAllMines } from '../game/rules';
 import type { Connection as SessionConnection, Over, Session } from '../game/session';
 import {
@@ -9,6 +9,9 @@ import {
   FRAME_REVEAL,
   FRAME_SNAPSHOT,
   type ClientMessage,
+  type GameEvent,
+  type Inventory,
+  type Item,
   type NetConfig,
   type Peer,
   type Phase,
@@ -39,6 +42,7 @@ export class NetworkSession implements Session {
   peers: Peer[] = [];
   phase: Phase = 'lobby';
   remaining: number | null = null;
+  inventory: Inventory | null = null;
   connection: SessionConnection = 'connecting';
   lastError: string | null = null;
 
@@ -53,6 +57,7 @@ export class NetworkSession implements Session {
   private boardListeners = new Set<() => void>();
   private stateListeners = new Set<() => void>();
   private presenceListeners = new Set<() => void>();
+  private eventListeners = new Set<(events: GameEvent[]) => void>();
 
   /** Le plateau a changé : redessiner. Plusieurs composants peuvent écouter —
    *  un créneau unique laisserait le dernier monté écraser les précédents. */
@@ -67,6 +72,10 @@ export class NetworkSession implements Session {
   subscribePresence(fn: () => void): () => void {
     this.presenceListeners.add(fn);
     return () => this.presenceListeners.delete(fn);
+  }
+  subscribeEvents(fn: (events: GameEvent[]) => void): () => void {
+    this.eventListeners.add(fn);
+    return () => this.eventListeners.delete(fn);
   }
   private emitBoard(): void {
     for (const fn of this.boardListeners) fn();
@@ -155,6 +164,9 @@ export class NetworkSession implements Session {
   flag(i: number): void {
     if (this.phase === 'playing') this.send({ t: 'flag', i });
   }
+  use(item: Item, i: number): void {
+    if (this.phase === 'playing') this.send({ t: 'use', item, i });
+  }
   setConfig(config: NetConfig): void {
     this.send({ t: 'config', config });
   }
@@ -238,6 +250,7 @@ export class NetworkSession implements Session {
     this.config = config;
     this.board = createBoard(config.n, config.mineCount);
     this.remaining = this.board.mineCount;
+    this.inventory = config.bonus ? { lives: 0, probes: 0, shields: 0 } : null;
     this.peers = [];
     this.stampClock(0, false);
   }
@@ -248,7 +261,11 @@ export class NetworkSession implements Session {
         this.selfId = msg.selfId;
         this.players = msg.players;
         this.phase = msg.phase;
-        if (this.board.n !== msg.config.n || this.phase === 'lobby') this.resetBoard(msg.config);
+        // Toujours repartir d'un plateau neuf : en cours de partie, le
+        // snapshot et la réserve suivent immédiatement ce message. Ne le
+        // faire que si `n` change garderait l'ancien nombre de mines ou
+        // l'ancien réglage bonus après un changement de carte de même largeur.
+        this.resetBoard(msg.config);
         this.stampClock(msg.elapsedMs, msg.phase === 'playing');
         this.emitState();
         break;
@@ -294,6 +311,16 @@ export class NetworkSession implements Session {
         break;
       }
 
+      case 'inventory':
+        this.inventory = msg.inventory;
+        this.remaining = msg.remaining;
+        this.emitState();
+        break;
+
+      case 'events':
+        for (const fn of this.eventListeners) fn(msg.events);
+        break;
+
       case 'presence':
         this.peers = msg.peers.filter((p) => p.id !== this.selfId);
         this.stampClock(msg.elapsedMs, this.phase === 'playing');
@@ -320,13 +347,13 @@ export class NetworkSession implements Session {
     const { board } = this;
     switch (bytes[0]) {
       case FRAME_REVEAL: {
-        const delta = applyReveal(bytes, board.state, board.adj, REVEALED);
+        const delta = applyReveal(bytes, board.state, board.adj, REVEALED, DEFUSED);
         board.revealedCount = delta.revealedCount;
         this.emitBoard();
         break;
       }
       case FRAME_SNAPSHOT: {
-        const meta = applySnapshot(bytes, board.state, board.adj, board.flagOwner, REVEALED, FLAGGED);
+        const meta = applySnapshot(bytes, board.state, board.adj, board.flagOwner, REVEALED, FLAGGED, DEFUSED);
         board.revealedCount = meta.revealedCount;
         this.emitBoard();
         break;

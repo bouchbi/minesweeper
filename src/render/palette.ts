@@ -17,6 +17,12 @@ export const C = {
   flagOnMine: '#f3f4f6',
   mineBg: '#7f1d1d',
   mine: '#0b0d10',
+  /** Mine désamorcée : connue et inoffensive, donc surtout pas du rouge de
+   *  la défaite. */
+  defusedBg: '#134e4a',
+  defusedMine: '#5eead4',
+  /** Contour de la zone visée par un objet armé. */
+  aim: '#a78bfa',
   cursor: '#fbbf24',
   minimapFrame: '#fbbf24',
 };
@@ -37,14 +43,16 @@ export const DIGIT_COLORS = [
 /**
  * Buckets de rendu. L'ordre est celui utilisé par drawGrid :
  *   0 = couverte, 1 = drapeau, 2 = mine révélée, 3..11 = révélée avec adj 0..8,
- *   12 = drapeau posé sur une bombe (uniquement après une défaite).
+ *   12 = drapeau posé sur une bombe (uniquement après une défaite),
+ *   13 = mine désamorcée.
  */
 export const BUCKET_COVERED = 0;
 export const BUCKET_FLAGGED = 1;
 export const BUCKET_MINE = 2;
 export const BUCKET_ADJ0 = 3;
 export const BUCKET_FLAGGED_MINE = 12;
-export const BUCKET_COUNT = 13;
+export const BUCKET_DEFUSED = 13;
+export const BUCKET_COUNT = 14;
 
 /** Remplissage de fond à zoom élevé : les chiffres portent l'information. */
 export const FILL_HI: string[] = [
@@ -55,6 +63,7 @@ export const FILL_HI: string[] = [
   C.revealed, C.revealed, C.revealed, C.revealed,
   C.revealed, C.revealed, C.revealed, C.revealed,
   C.mineBg,
+  C.defusedBg,
 ];
 
 /** Même palette que FILL_LO, en composantes RGB : utilisée par le rendu
@@ -77,6 +86,7 @@ export const FILL_LO: string[] = [
   '#1e3a5f', '#1e4d33', '#5c2626', '#4a2a5e',
   '#5e3a1a', '#155e64', '#4b5563', '#6b7280',
   C.mineBg,
+  '#14b8a6',
 ];
 
 /** Sous cette taille de case, fillRect devient trop coûteux (une carte 1000×1000

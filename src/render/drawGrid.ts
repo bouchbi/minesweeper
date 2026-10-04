@@ -1,10 +1,12 @@
-import { COVERED, FLAGGED, type Board } from '../game/board';
+import { COVERED, DEFUSED, FLAGGED, type Board } from '../game/board';
+import { PROBE_RADIUS, SHIELD_RADIUS } from '../game/rules';
 import { PLAYER_COLORS } from '../../shared/protocol';
-import type { GameView } from './gameView';
+import { FLASH_MS, type GameView } from './gameView';
 import {
   BUCKET_ADJ0,
   BUCKET_COUNT,
   BUCKET_COVERED,
+  BUCKET_DEFUSED,
   BUCKET_FLAGGED,
   BUCKET_FLAGGED_MINE,
   BUCKET_MINE,
@@ -38,6 +40,9 @@ const byOwner: number[][] = Array.from({ length: PLAYER_COLORS.length }, () => [
  *
  * Le coût ne dépend que de la taille du canvas et du zoom, jamais de `n` :
  * seules les cases comprises dans `visibleRange` sont parcourues.
+ *
+ * @returns true si une animation (flash) est en cours : l'appelant doit
+ *          redemander une frame.
  */
 export function drawGrid(
   ctx: CanvasRenderingContext2D,
@@ -45,14 +50,14 @@ export function drawGrid(
   view: GameView,
   w: number,
   h: number,
-): void {
+): boolean {
   const { vp, cursor } = view;
   const { n, state, adj, mines, minesExposed, flagOwner } = board;
   const cell = vp.cell;
 
   ctx.fillStyle = C.pageBg;
   ctx.fillRect(0, 0, w, h);
-  if (cell <= 0) return;
+  if (cell <= 0) return false;
 
   const r = visibleRange(vp, n, w, h);
   const originX = w / 2 - vp.cx * cell;
@@ -68,7 +73,8 @@ export function drawGrid(
   if (cell < LOD_PIXEL) {
     drawPixels(ctx, board, r, originX, originY, cell);
     drawCursor(ctx, cursor, originX, originY, cell, n);
-    return;
+    drawAim(ctx, view, originX, originY, cell, n);
+    return drawFlashes(ctx, view, originX, originY, cell);
   }
 
   const showText = cell >= LOD_TEXT;
@@ -91,7 +97,8 @@ export function drawGrid(
       else if (s === FLAGGED) {
         b = minesExposed && mines[i] ? BUCKET_FLAGGED_MINE : BUCKET_FLAGGED;
         (b === BUCKET_FLAGGED ? flagOwners : flagMineOwners).push(flagOwner[i]);
-      } else if (mines[i]) b = BUCKET_MINE;
+      } else if (s === DEFUSED) b = BUCKET_DEFUSED;
+      else if (mines[i]) b = BUCKET_MINE;
       else b = BUCKET_ADJ0 + adj[i];
       const arr = buckets[b];
       arr.push(originX + x * cell, sy);
@@ -120,6 +127,81 @@ export function drawGrid(
 
   drawPeerCursors(ctx, view, originX, originY, cell, n);
   drawCursor(ctx, cursor, originX, originY, cell, n);
+  drawAim(ctx, view, originX, originY, cell, n);
+  return drawFlashes(ctx, view, originX, originY, cell);
+}
+
+/** Zone que couvrira l'objet armé, autour de la case visée (souris, sinon
+ *  curseur clavier). */
+function drawAim(
+  ctx: CanvasRenderingContext2D,
+  view: GameView,
+  originX: number,
+  originY: number,
+  cell: number,
+  n: number,
+): void {
+  if (!view.armed) return;
+  const at = view.pointer ?? view.cursor;
+  if (at.x < 0 || at.y < 0 || at.x >= n || at.y >= n) return;
+  const r = view.armed === 'probe' ? PROBE_RADIUS : SHIELD_RADIUS;
+  const x0 = Math.max(0, at.x - r);
+  const y0 = Math.max(0, at.y - r);
+  const x1 = Math.min(n, at.x + r + 1);
+  const y1 = Math.min(n, at.y + r + 1);
+  const lw = Math.max(2, Math.round(cell * 0.08));
+  ctx.fillStyle = 'rgba(167, 139, 250, 0.16)';
+  ctx.fillRect(originX + x0 * cell, originY + y0 * cell, (x1 - x0) * cell, (y1 - y0) * cell);
+  ctx.lineWidth = lw;
+  ctx.strokeStyle = C.aim;
+  ctx.setLineDash([Math.max(4, cell * 0.3), Math.max(3, cell * 0.2)]);
+  ctx.strokeRect(
+    originX + x0 * cell + lw / 2,
+    originY + y0 * cell + lw / 2,
+    (x1 - x0) * cell - lw,
+    (y1 - y0) * cell - lw,
+  );
+  ctx.setLineDash([]);
+}
+
+/**
+ * Flashs qui s'estompent. Les expirés sont retirés du tableau en place.
+ * @returns true s'il en reste à animer.
+ */
+function drawFlashes(
+  ctx: CanvasRenderingContext2D,
+  view: GameView,
+  originX: number,
+  originY: number,
+  cell: number,
+): boolean {
+  const { flashes } = view;
+  if (flashes.length === 0) return false;
+  const now = performance.now();
+  let kept = 0;
+  for (const f of flashes) {
+    const t = (now - f.t0) / FLASH_MS;
+    if (t >= 1) continue;
+    flashes[kept++] = f;
+    const a = 1 - t;
+    // Au moins 3 px : sur une carte entièrement dézoomée, un flash d'une case
+    // doit rester repérable.
+    const pad = Math.max(0, (3 - cell * (f.x1 - f.x0)) / 2);
+    const x = originX + f.x0 * cell - pad;
+    const y = originY + f.y0 * cell - pad;
+    const wPx = (f.x1 - f.x0) * cell + pad * 2;
+    const hPx = (f.y1 - f.y0) * cell + pad * 2;
+    ctx.globalAlpha = a * 0.35;
+    ctx.fillStyle = f.color;
+    ctx.fillRect(x, y, wPx, hPx);
+    ctx.globalAlpha = a;
+    ctx.lineWidth = Math.max(2, Math.round(cell * 0.1));
+    ctx.strokeStyle = f.color;
+    ctx.strokeRect(x, y, wPx, hPx);
+  }
+  ctx.globalAlpha = 1;
+  flashes.length = kept;
+  return kept > 0;
 }
 
 /**
@@ -206,6 +288,7 @@ function drawPixels(
       let b: number;
       if (s === COVERED) b = BUCKET_COVERED;
       else if (s === FLAGGED) b = minesExposed && mines[i] ? BUCKET_FLAGGED_MINE : BUCKET_FLAGGED;
+      else if (s === DEFUSED) b = BUCKET_DEFUSED;
       else if (mines[i]) b = BUCKET_MINE;
       else b = BUCKET_ADJ0 + adj[i];
       const c = FILL_LO_RGB[b];
@@ -316,14 +399,17 @@ function drawFlags(ctx: CanvasRenderingContext2D, size: number): void {
 }
 
 function drawMines(ctx: CanvasRenderingContext2D, size: number): void {
-  const bare = buckets[BUCKET_MINE];
-  const flagged = buckets[BUCKET_FLAGGED_MINE];
-  if (bare.length === 0 && flagged.length === 0) return;
+  drawMineGlyphs(ctx, size, [buckets[BUCKET_MINE], buckets[BUCKET_FLAGGED_MINE]], C.mine);
+  drawMineGlyphs(ctx, size, [buckets[BUCKET_DEFUSED]], C.defusedMine);
+}
+
+function drawMineGlyphs(ctx: CanvasRenderingContext2D, size: number, groups: number[][], color: string): void {
+  if (groups.every((arr) => arr.length === 0)) return;
   const rad = size * 0.26;
   const half = size / 2;
-  ctx.fillStyle = C.mine;
+  ctx.fillStyle = color;
   ctx.beginPath();
-  for (const arr of [bare, flagged]) {
+  for (const arr of groups) {
     for (let k = 0; k < arr.length; k += 2) {
       const cx = arr[k] + half;
       const cy = arr[k + 1] + half;
@@ -334,7 +420,7 @@ function drawMines(ctx: CanvasRenderingContext2D, size: number): void {
   ctx.fill();
 
   const spike = Math.max(1, Math.round(size / 12));
-  for (const arr of [bare, flagged]) {
+  for (const arr of groups) {
     for (let k = 0; k < arr.length; k += 2) {
       const cx = arr[k] + half;
       const cy = arr[k + 1] + half;

@@ -1,4 +1,4 @@
-import { COVERED, FLAGGED, type Board } from '../game/board';
+import { COVERED, DEFUSED, FLAGGED, type Board } from '../game/board';
 import { PLAYER_COLORS, type Peer, type PlayerInfo } from '../../shared/protocol';
 import { C } from './palette';
 import type { Viewport } from './viewport';
@@ -74,6 +74,10 @@ export function buildMinimap(board: Board, prev: MinimapCache | null): MinimapCa
       // Après une défaite, un drapeau juste compte comme une mine : la minimap
       // reste cohérente avec ce que le plateau affiche.
       if (s === FLAGGED) counts[minesExposed && mines[i] ? p + 2 : p + 1]++;
+      // Mine désamorcée = mine connue, comme un drapeau. Testé avant `mines` :
+      // en co-op le client n'a pas ce tableau, et la minimap doit être la même
+      // qu'en solo.
+      else if (s === DEFUSED) counts[p + 1]++;
       else if (mines[i]) counts[p + 2]++;
       else counts[p]++;
     }

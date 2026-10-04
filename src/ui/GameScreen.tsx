@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { BONUS_DISCO, BONUS_HEART, BONUS_PROBE, BONUS_SHIELD } from '../game/board';
+import { PROBE_RADIUS, SHIELD_RADIUS } from '../game/rules';
 import type { GameConfig, Session } from '../game/session';
-import { createGameView } from '../render/gameView';
+import { createGameView, type GameView } from '../render/gameView';
+import type { GameEvent, Item } from '../../shared/protocol';
 import { GameCanvas } from './GameCanvas';
-import { BombCounter, Timer, ViewReadout } from './Hud';
+import {
+  BombCounter,
+  BONUS_LABEL,
+  InventoryBar,
+  ITEM_LABEL,
+  Timer,
+  type Toast,
+  Toasts,
+  ViewReadout,
+} from './Hud';
 import { Minimap } from './Minimap';
 import { PlayerList } from './PlayerList';
 
@@ -19,6 +31,61 @@ type Props = {
    *  possible : en solo (quitter suffit) ou pour un invité en réseau. */
   onChangeMap?: (() => void) | null;
 };
+
+/** Couleur du flash selon ce qui s'est passé. */
+const FLASH_COLOR: Record<number, string> = {
+  [BONUS_PROBE]: '#a78bfa',
+  [BONUS_SHIELD]: '#38bdf8',
+  [BONUS_HEART]: '#f472b6',
+  [BONUS_DISCO]: '#fbbf24',
+};
+const TOAST_MS = 3200;
+const MAX_TOASTS = 4;
+
+/** Ajoute à la vue le flash correspondant à un événement. */
+function flashFor(view: GameView, n: number, e: GameEvent, now: number): void {
+  const x = e.i % n;
+  const y = (e.i / n) | 0;
+  let r = 0;
+  let color = '#fbbf24';
+  if (e.kind === 'pickup') color = FLASH_COLOR[e.bonus] ?? color;
+  else if (e.kind === 'zone') r = 1;
+  else if (e.kind === 'life') color = '#ef4444';
+  else if (e.kind === 'use') {
+    r = e.item === 'probe' ? PROBE_RADIUS : SHIELD_RADIUS;
+    color = e.item === 'probe' ? FLASH_COLOR[BONUS_PROBE] : FLASH_COLOR[BONUS_SHIELD];
+  }
+  view.flashes.push({
+    x0: Math.max(0, x - r),
+    y0: Math.max(0, y - r),
+    x1: Math.min(n, x + r + 1),
+    y1: Math.min(n, y + r + 1),
+    t0: now,
+    color,
+  });
+}
+
+/** Message du HUD pour un événement, ou null s'il n'en mérite pas. */
+function toastFor(session: Session, e: GameEvent): Omit<Toast, 'id'> | null {
+  const self = e.by === session.selfId;
+  const name = session.players.find((p) => p.id === e.by)?.name ?? 'Quelqu’un';
+  const who = self ? 'Tu as' : `${name} a`;
+  switch (e.kind) {
+    case 'pickup': {
+      const label = BONUS_LABEL[e.bonus];
+      if (!label) return null;
+      const extra = e.bonus === BONUS_DISCO ? ' : des zones s’ouvrent !' : '';
+      return { text: `${who} trouvé ${label}${extra}`, tone: 'good' };
+    }
+    case 'life':
+      return { text: `${who} touché une mine — une vie perdue`, tone: 'bad' };
+    case 'use':
+      // Son propre geste se voit déjà sur le plateau.
+      return self ? null : { text: `${name} a utilisé ${ITEM_LABEL[e.item]}`, tone: 'info' };
+    case 'zone':
+      return null;
+  }
+}
 
 const CONNECTION_LABEL: Record<string, string> = {
   connecting: 'Connexion…',
@@ -92,7 +159,71 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
   const handleReveal = useCallback((i: number) => session.reveal(i), [session]);
   const handleFlag = useCallback((i: number) => session.flag(i), [session]);
 
+  // ── Objets : sélection puis pose ─────────────────────────────────────
+  const [armed, setArmed] = useState<Item | null>(null);
   const isOver = session.over !== null;
+  const inventory = session.inventory;
+  const stock = (item: Item) => (inventory ? (item === 'probe' ? inventory.probes : inventory.shields) : 0);
+
+  const arm = useCallback(
+    (item: Item | null) => {
+      const inv = session.inventory;
+      const has = inv && item && (item === 'probe' ? inv.probes : inv.shields) > 0;
+      setArmed(item && has && session.over === null ? item : null);
+    },
+    [session],
+  );
+  const handleUse = useCallback(
+    (item: Item, i: number) => {
+      session.use(item, i);
+      setArmed(null);
+    },
+    [session],
+  );
+
+  // Désarmer quand l'objet n'est plus disponible : partie finie, ou dernier
+  // exemplaire posé par un coéquipier (la réserve est commune).
+  const armedStock = armed ? stock(armed) : 0;
+  useEffect(() => {
+    if (armed && (isOver || armedStock === 0)) setArmed(null);
+  }, [armed, armedStock, isOver]);
+
+  // La vue lit l'objet armé pour dessiner la zone visée et router les clics.
+  useEffect(() => {
+    view.armed = armed;
+    view.notify();
+  }, [armed, view]);
+
+  // ── Événements : flashs sur le plateau, messages dans le HUD ─────────
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastSeq = useRef(0);
+  useEffect(() => {
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const stop = session.subscribeEvents((events) => {
+      const now = performance.now();
+      const n = session.board.n;
+      const fresh: Toast[] = [];
+      for (const e of events) {
+        flashFor(view, n, e, now);
+        const t = toastFor(session, e);
+        if (t) fresh.push({ ...t, id: ++toastSeq.current });
+      }
+      view.notify();
+      if (fresh.length === 0) return;
+      setToasts((prev) => [...prev, ...fresh].slice(-MAX_TOASTS));
+      const ids = new Set(fresh.map((t) => t.id));
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        setToasts((prev) => prev.filter((t) => !ids.has(t.id)));
+      }, TOAST_MS);
+      timers.add(timer);
+    });
+    return () => {
+      stop();
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [session, view]);
+
   const handleExit = useCallback(() => {
     if (!isOver && session.connection === 'local' && !confirm('Quitter la partie en cours ?')) return;
     onExit();
@@ -113,6 +244,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
           <span className="hud-label">Bombes</span>
           <BombCounter remaining={session.remaining} />
         </div>
+        {inventory && <InventoryBar inventory={inventory} armed={armed} enabled={!isOver} onArm={arm} />}
         <div className="hud-group grow">
           <span className="hud-label">
             {config.n}×{config.n} · {total.toLocaleString('fr-FR')} cases ·{' '}
@@ -147,15 +279,19 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
           enabled={!isOver}
           onReveal={handleReveal}
           onFlag={handleFlag}
+          onUse={handleUse}
+          onArm={arm}
           onExit={handleExit}
           onPointerMove={reportPresence}
         />
         <Minimap board={session.board} view={view} />
+        <Toasts toasts={toasts} />
       </div>
 
       <footer className="help mono">
-        flèches déplacer · maj+flèches ×10 · r révéler · f drapeau · molette zoom · glisser
-        déplacer · +/− zoom · 0 vue globale · échap quitter
+        flèches déplacer · maj+flèches ×10 · r révéler · f drapeau
+        {inventory ? ' · 1 sonde · 2 bouclier' : ''} · molette zoom · glisser déplacer · +/− zoom · 0
+        vue globale · échap {armed ? 'annuler' : 'quitter'}
       </footer>
     </div>
   );

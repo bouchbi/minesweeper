@@ -1,17 +1,31 @@
 /**
- * Modèle de plateau : trois TypedArrays plates indexées par `i = y * n + x`.
+ * Modèle de plateau : des TypedArrays plates indexées par `i = y * n + x`.
  *
- * Coût mémoire : 3 octets par case.
- *   100×100  ->   30 Ko
- *   500×500  ->  750 Ko
- *  1000×1000 ->    3 Mo
+ * Coût mémoire : 5 octets par case (mines, state, adj, flagOwner, bonus).
+ *   100×100  ->   50 Ko
+ *   500×500  ->  1,2 Mo
+ *  1000×1000 ->    5 Mo
  */
 
 export const COVERED = 0;
 export const REVEALED = 1;
 export const FLAGGED = 2;
+/** Mine connue et neutralisée (sonde, bouclier, ou vie consommée) : elle
+ *  s'affiche, ne fait plus perdre, et ne peut plus recevoir de drapeau. */
+export const DEFUSED = 3;
 
-export type CellState = typeof COVERED | typeof REVEALED | typeof FLAGGED;
+export type CellState = typeof COVERED | typeof REVEALED | typeof FLAGGED | typeof DEFUSED;
+
+/* Bonus cachés sous des cases sûres, ramassés quand la case est découverte. */
+export const BONUS_NONE = 0;
+/** Objet : révèle les mines d'un carré 5×5. */
+export const BONUS_PROBE = 1;
+/** Objet : découvre sans risque un carré 3×3. */
+export const BONUS_SHIELD = 2;
+/** Immédiat : une vie de plus (dans la limite du maximum). */
+export const BONUS_HEART = 3;
+/** Immédiat : ouvre plusieurs zones vides au hasard sur la carte. */
+export const BONUS_DISCO = 4;
 
 export type Board = {
   /** Largeur ET hauteur : les cartes sont carrées. */
@@ -20,10 +34,14 @@ export type Board = {
   mineCount: number;
   /** n*n valeurs 0|1. Rempli par `placeMines` (rules.ts). */
   mines: Uint8Array;
-  /** n*n valeurs COVERED|REVEALED|FLAGGED. Muté par `reveal`/`toggleFlag` (rules.ts). */
+  /** n*n valeurs COVERED|REVEALED|FLAGGED|DEFUSED. Muté uniquement par rules.ts. */
   state: Uint8Array;
   /** n*n valeurs 0..8. Rempli par `computeAdjacency` (rules.ts). */
   adj: Uint8Array;
+  /** n*n valeurs BONUS_*. Rempli par `placeBonuses` (rules.ts), vidé case par
+   *  case au ramassage. Secret comme `mines` : en co-op il reste à zéro chez
+   *  les clients, qui n'apprennent un bonus qu'au moment où il est ramassé. */
+  bonus: Uint8Array;
   /** Nombre de cases REVEALED. Tenu à jour par `reveal` ; comparé à
    *  `n*n - mineCount` pour détecter la victoire en O(1). */
   revealedCount: number;
@@ -54,6 +72,7 @@ export function createBoard(n: number, mineCount: number): Board {
     mines: new Uint8Array(total),
     state: new Uint8Array(total),
     adj: new Uint8Array(total),
+    bonus: new Uint8Array(total),
     flagOwner: new Uint8Array(total),
     revealedCount: 0,
     minesExposed: false,

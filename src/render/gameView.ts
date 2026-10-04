@@ -1,4 +1,4 @@
-import type { Peer, PlayerInfo } from '../../shared/protocol';
+import type { Item, Peer, PlayerInfo } from '../../shared/protocol';
 import { createViewport, type Viewport } from './viewport';
 
 /**
@@ -8,6 +8,12 @@ import { createViewport, type Viewport } from './viewport';
  *
  * Les consommateurs s'abonnent via `subscribe` et redessinent eux-mêmes.
  */
+/** Surbrillance éphémère d'un rectangle de cases (bonus ramassé, objet posé). */
+export type Flash = { x0: number; y0: number; x1: number; y1: number; t0: number; color: string };
+
+/** Durée d'un flash, en ms. */
+export const FLASH_MS = 900;
+
 export type GameView = {
   vp: Viewport;
   cursor: { x: number; y: number };
@@ -25,6 +31,11 @@ export type GameView = {
   peers: Peer[];
   /** Sert à retrouver la couleur et le nom d'un joueur par son identifiant. */
   players: PlayerInfo[];
+  /** Objet en attente de pose : le prochain clic (ou `r`) le pose au lieu de
+   *  révéler, et le rendu montre la zone qu'il couvrira. */
+  armed: Item | null;
+  /** Flashs en cours. Le rendu les fait s'estomper puis les retire. */
+  flashes: Flash[];
   listeners: Set<() => void>;
   notify(): void;
   subscribe(fn: () => void): () => void;
@@ -39,6 +50,8 @@ export function createGameView(n: number): GameView {
     pointer: null,
     peers: [],
     players: [],
+    armed: null,
+    flashes: [],
     listeners: new Set(),
     notify() {
       for (const fn of view.listeners) fn();
