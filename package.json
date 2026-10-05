@@ -1,6 +1,9 @@
 {
   "name": "minesweeper",
   "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
   "version": "0.1.1",
   "type": "module",
   "scripts": {

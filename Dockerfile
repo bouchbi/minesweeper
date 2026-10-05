@@ -1,5 +1,7 @@
+# Version mineure fixée : `node:sqlite` exige Node ≥ 22.13, et un tag flottant
+# (`22-alpine`) peut être servi depuis un vieux cache par Coolify.
 # ── Build : client (Vite) + serveur (esbuild) ─────────────────────────────
-FROM node:22-alpine AS build
+FROM node:22.23-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -7,7 +9,7 @@ COPY . .
 RUN npm run build:all
 
 # ── Runtime : seul `ws` reste externe au bundle serveur ───────────────────
-FROM node:22-alpine
+FROM node:22.23-alpine
 WORKDIR /app
 ENV NODE_ENV=production PORT=8080 HOST=0.0.0.0
 COPY package.json package-lock.json ./

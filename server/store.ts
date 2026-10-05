@@ -1,12 +1,13 @@
 import { mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import { RECORD_TOP, type RecordBoard, type RecordEntry, type RecordMode } from '../shared/protocol';
 
 /**
  * Stockage durable du serveur : parties mises de côté et records.
  *
- * SQLite (intégré à Node 22) plutôt que des fichiers : une écriture est
+ * SQLite (intégré à Node depuis 22.13) plutôt que des fichiers : une écriture est
  * atomique — un conteneur tué en pleine sauvegarde ne laisse pas de fichier à
  * moitié écrit — et le classement est une simple requête. Tout tient dans
  * `${DATA_DIR}/minesweeper.db`, à placer sur un volume persistant.
@@ -17,7 +18,12 @@ import { RECORD_TOP, type RecordBoard, type RecordEntry, type RecordMode } from 
 export class Store {
   private db: DatabaseSync;
 
+  /** @throws si Node n'a pas SQLite (avant 22.13) ou si `dir` est inaccessible :
+   *  le serveur tourne alors sans stockage. */
   constructor(dir: string) {
+    // Chargé à l'exécution, pas importé : un import statique ferait planter
+    // tout le serveur au démarrage sur un Node trop ancien.
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
     mkdirSync(dir, { recursive: true });
     this.db = new DatabaseSync(join(dir, 'minesweeper.db'));
     this.db.exec(`
