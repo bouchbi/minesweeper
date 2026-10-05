@@ -43,6 +43,8 @@ export interface Session {
   /** Place au classement obtenue par cette victoire ; toujours null en solo
    *  local, qui n'est pas classé (le navigateur pourrait tout truquer). */
   readonly record: RecordInfo | null;
+  /** Adresse du classement (`/api/records`) ; null hors ligne. */
+  readonly recordsUrl: string | null;
   /** Inscrit son nom sur le record solo qui vient d'être établi. */
   nameRecord(name: string): void;
   elapsedMs(): number;
@@ -83,6 +85,7 @@ export class LocalSession implements Session {
   clockRunning = false;
   endStats: EndStat[] | null = null;
   readonly record = null;
+  readonly recordsUrl = null;
 
   private boardListeners = new Set<() => void>();
   private stateListeners = new Set<() => void>();

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { densityPercent, MAX_N, PRESETS, validateConfig } from '../game/presets';
 import { loadLastConfig, loadName, loadSoloRoom, saveLastConfig, saveName } from '../game/settings';
 import { normalizeRoomCode, type RecordBoard } from '../../shared/protocol';
 import type { GameConfig } from './GameScreen';
 import { formatDuration } from './Hud';
+import { recordsOf, useRecords } from './records';
 
 /** Au-delà, on prévient sans bloquer : ça reste jouable, juste très grand. */
 const HUGE_CELLS = 100_000;
@@ -46,28 +47,6 @@ function wsUrl(server: string, query: string): string | null {
   return `${scheme}://${host}/ws?${query}`;
 }
 
-/** Classement des cartes prédéfinies ; vide si le serveur est injoignable
- *  (jeu hors ligne, serveur sans stockage). */
-function useRecords(server: string): RecordBoard[] {
-  const [boards, setBoards] = useState<RecordBoard[]>([]);
-  useEffect(() => {
-    const host = serverHost(server);
-    if (!host) return;
-    const ctrl = new AbortController();
-    fetch(`${location.protocol}//${host}/api/records`, { signal: ctrl.signal })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: unknown) => setBoards(Array.isArray(data) ? (data as RecordBoard[]) : []))
-      .catch(() => {
-        /* hors ligne : pas de records à afficher */
-      });
-    return () => ctrl.abort();
-  }, [server]);
-  return boards;
-}
-
-const recordsOf = (boards: RecordBoard[], preset: string, bonus: boolean, mode: 'solo' | 'coop') =>
-  boards.find((b) => b.preset === preset && b.bonus === bonus && b.mode === mode)?.entries ?? [];
-
 /** Partie en réseau à ouvrir. `solo` : partie classée d'un seul joueur sur
  *  une carte prédéfinie, lancée sans lobby. */
 export type LanTarget = {
@@ -98,7 +77,8 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
   const [roomText, setRoomText] = useState(invitedRoom);
   const [roomError, setRoomError] = useState<string | null>(null);
   const [soloRoom] = useState(loadSoloRoom);
-  const records = useRecords(server);
+  const host = serverHost(server);
+  const records = useRecords(host ? `${location.protocol}//${host}/api/records` : null);
 
   const connect = (query: string, solo: LanTarget['solo'] = null) => {
     const url = wsUrl(server, query);

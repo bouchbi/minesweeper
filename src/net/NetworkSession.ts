@@ -202,6 +202,11 @@ export class NetworkSession implements Session {
   backToLobby(): void {
     this.send({ t: 'lobby' });
   }
+  /** Même serveur que la partie, en HTTP(S). */
+  get recordsUrl(): string {
+    const u = new URL(this.url);
+    return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/api/records`;
+  }
   nameRecord(name: string): void {
     this.send({ t: 'recordName', name });
   }

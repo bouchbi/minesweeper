@@ -317,6 +317,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap, ro
   useEffect(() => {
     if (isOver) setShowEnd(true);
   }, [isOver]);
+  const closeEnd = useCallback(() => setShowEnd(false), []);
 
   const total = useMemo(() => config.n * config.n, [config.n]);
   const banner = CONNECTION_LABEL[session.connection];
@@ -381,7 +382,15 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap, ro
         />
         <Minimap board={session.board} view={view} />
         <ChatLog lines={chat} />
-        {isOver && showEnd && <EndPanel session={session} onClose={() => setShowEnd(false)} />}
+        {isOver && showEnd && (
+          <EndPanel
+            session={session}
+            config={config}
+            onClose={closeEnd}
+            onRestart={onRestart}
+            onMenu={onExit}
+          />
+        )}
       </div>
 
       <footer className="help mono">
