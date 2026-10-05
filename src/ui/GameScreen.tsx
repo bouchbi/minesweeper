@@ -18,6 +18,7 @@ import {
   Timer,
   ViewReadout,
 } from './Hud';
+import { copyText, inviteUrl } from './invite';
 import { BONUS_EMOJI, createPickupFx } from './pickupFx';
 import { Minimap } from './Minimap';
 import { PlayerList } from './PlayerList';
@@ -34,6 +35,8 @@ type Props = {
   /** Change de carte sans quitter la session. `null` quand ce n'est pas
    *  possible : en solo (quitter suffit) ou pour un invité en réseau. */
   onChangeMap?: (() => void) | null;
+  /** Code de la salle en réseau, affiché pour inviter en cours de partie. */
+  roomCode?: string;
 };
 
 /** Couleur du flash selon ce qui s'est passé. */
@@ -104,7 +107,7 @@ const CONNECTION_LABEL: Record<string, string> = {
   lost: 'Connexion perdue — reconnexion en cours…',
 };
 
-export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: Props) {
+export function GameScreen({ session, config, onExit, onRestart, onChangeMap, roomCode }: Props) {
   const [view] = useState(() => createGameView(config.n));
   const [, forceRender] = useReducer((v: number) => v + 1, 0);
 
@@ -314,6 +317,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
   return (
     <div className="game">
       <header className="hud">
+        {roomCode && <RoomCode code={roomCode} />}
         <div className="hud-group">
           <span className="hud-label">Temps</span>
           <Timer session={session} />
@@ -372,5 +376,26 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap }: 
         vue globale · échap {armed ? 'annuler' : 'quitter'}
       </footer>
     </div>
+  );
+}
+
+/** Code de la salle, en tête du HUD ; un clic copie le lien d'invitation. */
+function RoomCode({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className="room-code"
+      title="Copier le lien d'invitation"
+      onClick={async () => setCopied(await copyText(inviteUrl(code)))}
+    >
+      <span className="hud-label">{copied ? 'Copié' : 'Salle'}</span>
+      <span className="mono">{code}</span>
+    </button>
   );
 }

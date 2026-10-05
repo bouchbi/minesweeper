@@ -22,6 +22,19 @@ export function LanScreen({ url, name, code, onLeave }: Props) {
     };
   }, [session]);
 
+  // Code dans l'URL : la barre d'adresse sert de lien d'invitation, même en
+  // pleine partie. replaceState pour ne pas créer d'entrée d'historique.
+  useEffect(() => {
+    const setRoom = (value: string | null) => {
+      const u = new URL(location.href);
+      if (value) u.searchParams.set('room', value);
+      else u.searchParams.delete('room');
+      history.replaceState(history.state, '', u);
+    };
+    setRoom(code);
+    return () => setRoom(null);
+  }, [code]);
+
   if (session.lastError) {
     return (
       <div className="home">
@@ -47,6 +60,7 @@ export function LanScreen({ url, name, code, onLeave }: Props) {
       onExit={onLeave}
       onRestart={() => session.restart()}
       onChangeMap={session.canRestart ? () => session.backToLobby() : null}
+      roomCode={code}
     />
   );
 }

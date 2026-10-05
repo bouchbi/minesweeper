@@ -103,7 +103,7 @@ export function InventoryBar({
 }) {
   const { lives, shields } = inventory;
   const items: [Item, string, number, string, string][] = [
-    ['shield', '🛡', shields, '1', 'Bouclier : découvre sans risque un losange de 4 cases de diagonale'],
+    ['shield', '🛡️', shields, '1', 'Bouclier : découvre sans risque un losange de 4 cases de diagonale'],
   ];
   return (
     <div className="inventory">
@@ -128,7 +128,9 @@ export function InventoryBar({
           title={`${help} — touche ${key}`}
           onClick={() => onArm(armed === item ? null : item)}
         >
-          <span aria-hidden>{icon}</span>
+          <span className="item-icon" aria-hidden>
+            {icon}
+          </span>
           <b className="mono">{count}</b>
           <kbd>{key}</kbd>
         </button>

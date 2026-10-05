@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { densityPercent, MAX_N, PRESETS, validateConfig } from '../game/presets';
 import type { NetworkSession } from '../net/NetworkSession';
 import { BonusToggle } from './HomeScreen';
+import { copyText, inviteUrl as inviteLink } from './invite';
 import { PlayerList } from './PlayerList';
 
 /**
@@ -15,7 +16,7 @@ export function LobbyScreen({ session, code, onLeave }: Props) {
   const [nText, setNText] = useState(String(session.config.n));
   const [minesText, setMinesText] = useState(String(session.config.mineCount));
   const [copied, setCopied] = useState(false);
-  const inviteUrl = `${location.origin}/?room=${code}`;
+  const inviteUrl = inviteLink(code);
 
   // Un invité suit la configuration de l'hôte ; l'hôte garde sa saisie.
   const n = isHost ? Number.parseInt(nText, 10) : session.config.n;
@@ -33,13 +34,9 @@ export function LobbyScreen({ session, code, onLeave }: Props) {
   };
 
   const copyInvite = async () => {
-    try {
-      await navigator.clipboard.writeText(inviteUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* presse-papiers refusé (http non local, permissions) : le lien reste sélectionnable */
-    }
+    if (!(await copyText(inviteUrl))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   };
 
   return (
