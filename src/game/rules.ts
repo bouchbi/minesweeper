@@ -9,7 +9,7 @@ import {
   REVEALED,
   forEachNeighbor,
   type Board,
-} from './board';
+} from "./board";
 
 /**
  * Règles du jeu : les seules fonctions du projet qui mutent `board.mines`,
@@ -60,10 +60,14 @@ export function placeMines(board: Board, safeIndex: number): void {
     const blockSize = (bx1 - bx0 + 1) * (by1 - by0 + 1);
 
     if (total - blockSize >= mineCount) {
-      x0 = bx0; x1 = bx1; y0 = by0; y1 = by1;
+      x0 = bx0;
+      x1 = bx1;
+      y0 = by0;
+      y1 = by1;
       safeCount = blockSize;
     } else if (total - 1 >= mineCount) {
-      x0 = x1 = sx; y0 = y1 = sy;
+      x0 = x1 = sx;
+      y0 = y1 = sy;
       safeCount = 1;
     }
   }
@@ -150,13 +154,16 @@ let openedCount = 0;
  *          'noop' si la case était déjà révélée ou drapeautée,
  *          'ok'   sinon.
  */
-export function reveal(board: Board, i: number): 'ok' | 'boom' | 'win' | 'noop' {
+export function reveal(
+  board: Board,
+  i: number,
+): "ok" | "boom" | "win" | "noop" {
   const { n, state, mines, adj } = board;
   const total = n * n;
   openedCount = 0;
-  if (i < 0 || i >= total) return 'noop';
+  if (i < 0 || i >= total) return "noop";
   // Une case drapeautée est protégée du clic : c'est tout l'intérêt du drapeau.
-  if (state[i] !== COVERED) return 'noop';
+  if (state[i] !== COVERED) return "noop";
 
   if (!cascade || cascade.length < total) cascade = new Int32Array(total);
   const queue = cascade;
@@ -166,7 +173,7 @@ export function reveal(board: Board, i: number): 'ok' | 'boom' | 'win' | 'noop' 
     // Consigné aussi : le serveur doit pouvoir diffuser cette case-là.
     queue[0] = i;
     openedCount = 1;
-    return 'boom';
+    return "boom";
   }
 
   const last = n - 1;
@@ -206,7 +213,7 @@ export function reveal(board: Board, i: number): 'ok' | 'boom' | 'win' | 'noop' 
 
   openedCount = tail;
   board.revealedCount += tail;
-  return board.revealedCount === total - board.mineCount ? 'win' : 'ok';
+  return board.revealedCount === total - board.mineCount ? "win" : "ok";
 }
 
 /**
@@ -287,8 +294,8 @@ export const DISCO_ZONES = 4;
 
 /** Répartition des bonus tirés, en poids relatifs. */
 const BONUS_WEIGHTS: readonly (readonly [number, number])[] = [
-  [BONUS_SHIELD, 55],
-  [BONUS_HEART, 25],
+  [BONUS_SHIELD, 45],
+  [BONUS_HEART, 35],
   [BONUS_DISCO, 20],
 ];
 const BONUS_WEIGHT_TOTAL = BONUS_WEIGHTS.reduce((t, [, w]) => t + w, 0);
@@ -314,15 +321,19 @@ export function placeBonuses(board: Board, safeIndex: number): void {
   bonus.fill(BONUS_NONE);
   const sx = safeIndex % n;
   const sy = (safeIndex / n) | 0;
-  const spared = (x: number, y: number) => Math.abs(x - sx) <= 1 && Math.abs(y - sy) <= 1;
+  const spared = (x: number, y: number) =>
+    Math.abs(x - sx) <= 1 && Math.abs(y - sy) <= 1;
 
   let candidates = 0;
   for (let y = 0; y < n; y++) {
     const row = y * n;
-    for (let x = 0; x < n; x++) if (!mines[row + x] && !spared(x, y)) candidates++;
+    for (let x = 0; x < n; x++)
+      if (!mines[row + x] && !spared(x, y)) candidates++;
   }
 
-  let remaining = Math.round(Math.min(candidates / BONUS_EVERY, board.mineCount / BONUS_PER_MINES));
+  let remaining = Math.round(
+    Math.min(candidates / BONUS_EVERY, board.mineCount / BONUS_PER_MINES),
+  );
   for (let y = 0; y < n && remaining > 0; y++) {
     const row = y * n;
     for (let x = 0; x < n; x++) {
@@ -363,7 +374,12 @@ export function defuse(board: Board, i: number): number {
 
 /** Appelle `fn` pour chaque case du losange de rayon `r` (distance de
  *  Manhattan) centré sur `i`, en ignorant ce qui dépasse du plateau. */
-export function forEachInDiamond(n: number, i: number, r: number, fn: (j: number) => void): void {
+export function forEachInDiamond(
+  n: number,
+  i: number,
+  r: number,
+  fn: (j: number) => void,
+): void {
   const x = i % n;
   const y = (i / n) | 0;
   for (let dy = -r; dy <= r; dy++) {
@@ -371,7 +387,8 @@ export function forEachInDiamond(n: number, i: number, r: number, fn: (j: number
     if (yy < 0 || yy >= n) continue;
     const w = r - Math.abs(dy);
     const row = yy * n;
-    for (let xx = Math.max(0, x - w); xx <= Math.min(n - 1, x + w); xx++) fn(row + xx);
+    for (let xx = Math.max(0, x - w); xx <= Math.min(n - 1, x + w); xx++)
+      fn(row + xx);
   }
 }
 
@@ -386,7 +403,12 @@ export function forEachInDiamond(n: number, i: number, r: number, fn: (j: number
  * @param outSafe    reçoit les cases sûres encore couvertes, à révéler
  * @returns le nombre de drapeaux retirés (sur mine comme sur case sûre)
  */
-export function shield(board: Board, i: number, outDefused: number[], outSafe: number[]): number {
+export function shield(
+  board: Board,
+  i: number,
+  outDefused: number[],
+  outSafe: number[],
+): number {
   const { mines, state, flagOwner } = board;
   let flagsTaken = 0;
   forEachInDiamond(board.n, i, SHIELD_RADIUS, (j) => {
@@ -423,12 +445,19 @@ export function randomOpening(board: Board): number {
   for (const wantEmpty of [true, false]) {
     let count = 0;
     for (let j = 0; j < total; j++) {
-      if (state[j] === COVERED && !mines[j] && (!wantEmpty || adj[j] === 0)) count++;
+      if (state[j] === COVERED && !mines[j] && (!wantEmpty || adj[j] === 0))
+        count++;
     }
     if (count === 0) continue;
     let k = Math.floor(Math.random() * count);
     for (let j = 0; j < total; j++) {
-      if (state[j] === COVERED && !mines[j] && (!wantEmpty || adj[j] === 0) && k-- === 0) return j;
+      if (
+        state[j] === COVERED &&
+        !mines[j] &&
+        (!wantEmpty || adj[j] === 0) &&
+        k-- === 0
+      )
+        return j;
     }
   }
   return -1;
@@ -463,5 +492,6 @@ export function placeTestBonuses(board: Board, kinds: readonly number[]): void {
   shuffle(frontier);
   shuffle(rest);
   const pool = frontier.concat(rest);
-  for (let k = 0; k < kinds.length && k < pool.length; k++) bonus[pool[k]] = kinds[k];
+  for (let k = 0; k < kinds.length && k < pool.length; k++)
+    bonus[pool[k]] = kinds[k];
 }
