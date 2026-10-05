@@ -411,3 +411,80 @@ kbd {
   will-change: transform, opacity;
   filter: drop-shadow(0 0 6px var(--glow)) drop-shadow(0 0 14px var(--glow));
 }
+
+/* ── Bilan de fin de partie ───────────────────────────────────────────── */
+.end-panel {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  padding: 18px 20px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(23, 26, 33, 0.96);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.end-panel h2 { margin: 0 0 8px; font-size: 22px; display: flex; align-items: baseline; gap: 12px; }
+.end-won h2 { color: #86efac; }
+.end-dead h2 { color: #fca5a5; }
+.end-panel h2 .mono { color: var(--text); font-size: 19px; }
+.end-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+.end-close:hover { color: var(--text); }
+.end-record { margin: 0 0 10px; color: var(--accent); font-weight: 600; }
+.end-note { margin: 0 0 10px; font-size: 13px; }
+.end-name { display: flex; gap: 8px; margin: 0 0 12px; }
+.end-name input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+.end-stats { width: 100%; border-collapse: collapse; font-size: 14px; }
+.end-stats th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 4px 8px 6px 0;
+  border-bottom: 1px solid var(--line);
+  cursor: help;
+}
+.end-stats td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+.end-stats tr:last-child td { border-bottom: 0; }
+
+/* ── Records et parties classées (accueil) ────────────────────────────── */
+.ranked-hint { display: block; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+.resume { margin-top: 16px; }
+.preset > small.best-time { color: var(--accent); }
+.records { margin-top: 28px; }
+.records summary {
+  cursor: pointer;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+.records-board h3 { margin: 18px 0 6px; font-size: 14px; }
+.records-board ol { margin: 0; padding-left: 22px; }
+.records-board li { padding: 2px 0; }
+.records-board li::marker { color: var(--muted); }
+.records-board li { display: list-item; }
+.records-board li > * + * { margin-left: 12px; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }

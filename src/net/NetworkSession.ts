@@ -9,6 +9,7 @@ import {
   FRAME_REVEAL,
   FRAME_SNAPSHOT,
   type ClientMessage,
+  type EndStat,
   type GameEvent,
   type Inventory,
   type Item,
@@ -17,6 +18,7 @@ import {
   type Phase,
   type PlayerId,
   type PlayerInfo,
+  type RecordInfo,
   type Rect,
   type ServerMessage,
 } from '../../shared/protocol';
@@ -45,6 +47,14 @@ export class NetworkSession implements Session {
   inventory: Inventory | null = null;
   connection: SessionConnection = 'connecting';
   lastError: string | null = null;
+  /** Code de la salle, connu au `welcome` (c'est le serveur qui l'attribue
+   *  quand on crée une salle). */
+  code: string | null = null;
+  /** Le serveur a répondu au moins une fois. Sinon, un échec de connexion
+   *  veut dire serveur injoignable plutôt que coupure passagère. */
+  everConnected = false;
+  endStats: EndStat[] | null = null;
+  record: RecordInfo | null = null;
 
   /** `over` et `clockRunning` complètent le contrat `Session` ; `phase` reste
    *  la source de vérité côté réseau (il connaît en plus l'état 'lobby'). */
@@ -97,6 +107,7 @@ export class NetworkSession implements Session {
 
   private ws: WebSocket | null = null;
   private name: string;
+  private key: string;
   private url: string;
   private disposed = false;
   private attempt = 0;
@@ -113,9 +124,11 @@ export class NetworkSession implements Session {
   private lastSent: { x: number; y: number; view: Rect } | null = null;
   private cursorTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(url: string, name: string, config: NetConfig) {
+  /** @param url `/ws?room=<code>` pour rejoindre, `/ws?create=1…` pour créer. */
+  constructor(url: string, name: string, key: string, config: NetConfig) {
     this.url = url;
     this.name = name;
+    this.key = key;
     this.config = config;
     this.board = createBoard(config.n, config.mineCount);
     this.connect();
@@ -133,7 +146,8 @@ export class NetworkSession implements Session {
     ws.onopen = () => {
       this.attempt = 0;
       this.connection = 'online';
-      this.send({ t: 'join', name: this.name });
+      this.everConnected = true;
+      this.send({ t: 'join', name: this.name, key: this.key });
       this.emitState();
     };
     ws.onmessage = (e: MessageEvent) => this.receive(e.data);
@@ -187,6 +201,9 @@ export class NetworkSession implements Session {
   /** Hôte : ramène tout le monde au lobby pour changer de carte. */
   backToLobby(): void {
     this.send({ t: 'lobby' });
+  }
+  nameRecord(name: string): void {
+    this.send({ t: 'recordName', name });
   }
 
   /** Position du curseur et rectangle de vue, limités à 10 Hz. */
@@ -261,12 +278,19 @@ export class NetworkSession implements Session {
     this.inventory = config.bonus ? { lives: 0, shields: 0 } : null;
     this.deferredEvents = [];
     this.peers = [];
+    this.endStats = null;
+    this.record = null;
     this.stampClock(0, false);
   }
 
   private onJson(msg: ServerMessage): void {
     switch (msg.t) {
-      case 'welcome':
+      case 'welcome': {
+        // Une reconnexion doit rejoindre CETTE salle, pas en créer une autre.
+        this.code = msg.code;
+        const url = new URL(this.url);
+        url.search = `?room=${encodeURIComponent(msg.code)}`;
+        this.url = url.toString();
         this.selfId = msg.selfId;
         this.players = msg.players;
         this.phase = msg.phase;
@@ -278,6 +302,7 @@ export class NetworkSession implements Session {
         this.stampClock(msg.elapsedMs, msg.phase === 'playing');
         this.emitState();
         break;
+      }
 
       case 'players':
         this.players = msg.players;
@@ -344,6 +369,8 @@ export class NetworkSession implements Session {
 
       case 'over':
         this.phase = msg.outcome;
+        this.endStats = msg.stats;
+        this.record = msg.record;
         this.stampClock(msg.elapsedMs, false);
         this.emitState();
         this.emitBoard();

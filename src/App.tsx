@@ -1,34 +1,38 @@
 import { useState } from 'react';
 import { LocalSession, type GameConfig } from './game/session';
 import { GameScreen } from './ui/GameScreen';
-import { HomeScreen } from './ui/HomeScreen';
+import { HomeScreen, type LanTarget } from './ui/HomeScreen';
 import { LanScreen } from './ui/LanScreen';
 
 type Screen =
   | { kind: 'home' }
   | { kind: 'solo'; config: GameConfig; seq: number }
-  | { kind: 'lan'; url: string; name: string; code: string };
+  | { kind: 'lan'; target: LanTarget; seq: number };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: 'home' });
+  const playLocal = (config: GameConfig) => setScreen({ kind: 'solo', config, seq: Date.now() });
 
   if (screen.kind === 'home') {
     return (
       <HomeScreen
-        onStart={(config) => setScreen({ kind: 'solo', config, seq: Date.now() })}
-        onJoinLan={(url, name, code) => setScreen({ kind: 'lan', url, name, code })}
+        onStart={playLocal}
+        onJoinLan={(target) => setScreen({ kind: 'lan', target, seq: Date.now() })}
       />
     );
   }
 
   if (screen.kind === 'lan') {
+    const { target } = screen;
+    const offline = target.solo?.config;
     return (
       <LanScreen
-        key={screen.url}
-        url={screen.url}
-        name={screen.name}
-        code={screen.code}
+        key={screen.seq}
+        url={target.url}
+        name={target.name}
+        solo={target.solo ? { preset: target.solo.preset } : null}
         onLeave={() => setScreen({ kind: 'home' })}
+        onOffline={offline ? () => playLocal(offline) : null}
       />
     );
   }

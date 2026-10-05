@@ -14,6 +14,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
+# Parties sauvegardées et records (SQLite). À monter sur un volume persistant
+# dans Coolify (Storages), sinon tout repart à zéro à chaque redéploiement.
+RUN mkdir -p /app/data && chown node:node /app/data
 EXPOSE 8080
 USER node
 CMD ["node", "dist-server/main.mjs", "dist"]

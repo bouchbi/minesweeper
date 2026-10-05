@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/main.mjs",
+    "build:server": "esbuild server/main.ts server/admin.ts --bundle --platform=node --format=esm --packages=external --outdir=dist-server --out-extension:.js=.mjs",
     "build:all": "npm run build && npm run build:server",
     "start": "node dist-server/main.mjs dist",
     "serve": "npm run build:all && npm start",

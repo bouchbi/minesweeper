@@ -4,3 +4,4 @@ dist-server
 .git
 .DS_Store
 *.local
+data

@@ -38,3 +38,72 @@ export function saveLastConfig(config: StoredConfig): void {
     /* stockage indisponible : on joue sans mémoire, c'est tout */
   }
 }
+
+/* ── Joueur ─────────────────────────────────────────────────────────── */
+
+const PLAYER_KEY = 'minesweeper:player-key';
+const NAME_KEY = 'minesweeper:name';
+const SOLO_KEY = 'minesweeper:solo-room';
+
+/** Clé de ce navigateur, envoyée au serveur pour retrouver sa place dans une
+ *  salle (voir PLAYER_KEY_RE). Sans stockage, une clé neuve par chargement :
+ *  on perd seulement la continuité. */
+let sessionKey: string | null = null;
+export function playerKey(): string {
+  try {
+    const stored = localStorage.getItem(PLAYER_KEY);
+    if (stored && /^[a-z0-9]{16,64}$/.test(stored)) return stored;
+  } catch {
+    /* repli plus bas */
+  }
+  if (!sessionKey) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    sessionKey = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  try {
+    localStorage.setItem(PLAYER_KEY, sessionKey);
+  } catch {
+    /* stockage indisponible */
+  }
+  return sessionKey;
+}
+
+export function loadName(): string {
+  try {
+    return (localStorage.getItem(NAME_KEY) ?? '').slice(0, 24);
+  } catch {
+    return '';
+  }
+}
+
+export function saveName(name: string): void {
+  try {
+    if (name.trim()) localStorage.setItem(NAME_KEY, name.trim().slice(0, 24));
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
+/** Dernière partie solo classée en cours, pour la reprendre depuis l'accueil. */
+export type SoloRoom = { code: string; preset: string };
+
+export function loadSoloRoom(): SoloRoom | null {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(SOLO_KEY) ?? 'null');
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const { code, preset } = parsed as Partial<SoloRoom>;
+    return typeof code === 'string' && typeof preset === 'string' ? { code, preset } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSoloRoom(room: SoloRoom | null): void {
+  try {
+    if (room) localStorage.setItem(SOLO_KEY, JSON.stringify(room));
+    else localStorage.removeItem(SOLO_KEY);
+  } catch {
+    /* stockage indisponible */
+  }
+}

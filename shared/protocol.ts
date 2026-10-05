@@ -78,8 +78,49 @@ export function randomRoomCode(length = 6): string {
 
 export type Peer = { id: PlayerId; x: number; y: number; view: Rect };
 
+/**
+ * Clé joueur : tirée une fois par navigateur et gardée en localStorage. Elle
+ * rend sa place (couleur, drapeaux, statistiques) à un joueur qui revient,
+ * y compris dans une partie reprise d'une sauvegarde. Ce n'est pas une
+ * authentification, seulement de la continuité.
+ */
+export const PLAYER_KEY_RE = /^[a-z0-9]{16,64}$/;
+
+/* ── Statistiques et records ────────────────────────────────────────── */
+
+/** Compteurs d'un joueur sur une partie, tenus par GameEngine. */
+export type PlayerStats = {
+  /** Cases ouvertes, hors cascade gratuite du premier clic. */
+  revealed: number;
+  /** Drapeaux justes encore en place à la fin + mines désamorcées au bouclier. */
+  minesFound: number;
+  /** Drapeaux posés sur une case sûre. */
+  wrongFlags: number;
+  /** Mines touchées, rattrapées par une vie ou fatales. */
+  livesLost: number;
+  bonuses: number;
+  shieldsUsed: number;
+};
+
+export type EndStat = PlayerStats & { id: PlayerId; name: string; color: string };
+
+/** Solo : un seul joueur a agi pendant la partie. Co-op : plusieurs. */
+export type RecordMode = 'solo' | 'coop';
+
+/** Place obtenue au classement d'une carte prédéfinie. `nameable` : joueur
+ *  invité à saisir le nom du record (solo uniquement). */
+export type RecordInfo = { preset: string; bonus: boolean; mode: RecordMode; rank: number; nameable: PlayerId | null };
+
+export type RecordEntry = { names: string[]; elapsedMs: number; finishedAt: number };
+export type RecordBoard = { preset: string; bonus: boolean; mode: RecordMode; entries: RecordEntry[] };
+
+/** Rang au-delà duquel une partie n'entre pas au classement. */
+export const RECORD_TOP = 10;
+
 export type ClientMessage =
-  | { t: 'join'; name: string }
+  | { t: 'join'; name: string; key?: string }
+  /** Nom à inscrire sur le record solo qui vient d'être établi. */
+  | { t: 'recordName'; name: string }
   | { t: 'config'; config: NetConfig }
   | { t: 'start' }
   | { t: 'reveal'; i: number }
@@ -91,7 +132,16 @@ export type ClientMessage =
   | { t: 'lobby' };
 
 export type ServerMessage =
-  | { t: 'welcome'; selfId: PlayerId; players: PlayerInfo[]; phase: Phase; config: NetConfig; elapsedMs: number }
+  | {
+      t: 'welcome';
+      /** Code de la salle : c'est le serveur qui l'attribue à la création. */
+      code: string;
+      selfId: PlayerId;
+      players: PlayerInfo[];
+      phase: Phase;
+      config: NetConfig;
+      elapsedMs: number;
+    }
   /** Réserve et compteur de bombes, envoyés à chaque changement et à l'arrivée
    *  d'un joueur en cours de partie. `inventory` est null sans bonus. */
   | { t: 'inventory'; inventory: Inventory | null; remaining: number }
@@ -101,7 +151,14 @@ export type ServerMessage =
   | { t: 'started' }
   | { t: 'flag'; i: number; on: boolean; owner: PlayerId; remaining: number }
   | { t: 'presence'; elapsedMs: number; peers: Peer[] }
-  | { t: 'over'; outcome: 'dead' | 'won'; by: PlayerId; elapsedMs: number }
+  | {
+      t: 'over';
+      outcome: 'dead' | 'won';
+      by: PlayerId;
+      elapsedMs: number;
+      stats: EndStat[];
+      record: RecordInfo | null;
+    }
   | { t: 'reset'; config: NetConfig }
   | { t: 'lobby'; config: NetConfig }
   | { t: 'error'; message: string };

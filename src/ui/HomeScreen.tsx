@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { densityPercent, MAX_N, PRESETS, validateConfig } from '../game/presets';
-import { loadLastConfig, saveLastConfig } from '../game/settings';
-import { normalizeRoomCode, randomRoomCode } from '../../shared/protocol';
+import { loadLastConfig, loadName, loadSoloRoom, saveLastConfig, saveName } from '../game/settings';
+import { normalizeRoomCode, type RecordBoard } from '../../shared/protocol';
 import type { GameConfig } from './GameScreen';
+import { formatDuration } from './Hud';
 
 /** Au-delà, on prévient sans bloquer : ça reste jouable, juste très grand. */
 const HUGE_CELLS = 100_000;
@@ -33,16 +34,53 @@ function invitedRoom(): string {
   return normalizeRoomCode(new URLSearchParams(location.search).get('room')) ?? '';
 }
 
-function wsUrl(server: string, code: string): string | null {
-  const host = server.trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+function serverHost(server: string): string | null {
+  return server.trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/+$/, '') || null;
+}
+
+/** @param query `room=<code>` pour rejoindre, `create=1…` pour créer. */
+function wsUrl(server: string, query: string): string | null {
+  const host = serverHost(server);
   if (!host) return null;
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${scheme}://${host}/ws?room=${encodeURIComponent(code)}`;
+  return `${scheme}://${host}/ws?${query}`;
 }
+
+/** Classement des cartes prédéfinies ; vide si le serveur est injoignable
+ *  (jeu hors ligne, serveur sans stockage). */
+function useRecords(server: string): RecordBoard[] {
+  const [boards, setBoards] = useState<RecordBoard[]>([]);
+  useEffect(() => {
+    const host = serverHost(server);
+    if (!host) return;
+    const ctrl = new AbortController();
+    fetch(`${location.protocol}//${host}/api/records`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: unknown) => setBoards(Array.isArray(data) ? (data as RecordBoard[]) : []))
+      .catch(() => {
+        /* hors ligne : pas de records à afficher */
+      });
+    return () => ctrl.abort();
+  }, [server]);
+  return boards;
+}
+
+const recordsOf = (boards: RecordBoard[], preset: string, bonus: boolean, mode: 'solo' | 'coop') =>
+  boards.find((b) => b.preset === preset && b.bonus === bonus && b.mode === mode)?.entries ?? [];
+
+/** Partie en réseau à ouvrir. `solo` : partie classée d'un seul joueur sur
+ *  une carte prédéfinie, lancée sans lobby. */
+export type LanTarget = {
+  url: string;
+  name: string;
+  /** `config` permet de rejouer hors ligne si le serveur ne répond pas ;
+   *  null pour la reprise d'une partie, qui n'existe que sur le serveur. */
+  solo: { preset: string; config: GameConfig | null } | null;
+};
 
 type HomeProps = {
   onStart: (config: GameConfig) => void;
-  onJoinLan: (url: string, name: string, code: string) => void;
+  onJoinLan: (target: LanTarget) => void;
 };
 
 export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
@@ -56,22 +94,29 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
     presetIdFor(initial.n, initial.mineCount),
   );
   const [server, setServer] = useState(defaultServer);
-  const [playerName, setPlayerName] = useState('');
+  const [playerName, setPlayerName] = useState(loadName);
   const [roomText, setRoomText] = useState(invitedRoom);
   const [roomError, setRoomError] = useState<string | null>(null);
+  const [soloRoom] = useState(loadSoloRoom);
+  const records = useRecords(server);
+
+  const connect = (query: string, solo: LanTarget['solo'] = null) => {
+    const url = wsUrl(server, query);
+    if (!url) {
+      setRoomError('Adresse du serveur manquante.');
+      return;
+    }
+    setRoomError(null);
+    saveName(playerName);
+    onJoinLan({ url, name: playerName.trim() || 'Joueur', solo });
+  };
 
   const joinRoom = (code: string | null) => {
     if (!code) {
       setRoomError('Le code de salle fait 4 à 12 lettres ou chiffres.');
       return;
     }
-    const url = wsUrl(server, code);
-    if (!url) {
-      setRoomError('Adresse du serveur manquante.');
-      return;
-    }
-    setRoomError(null);
-    onJoinLan(url, playerName.trim() || 'Joueur', code);
+    connect(`room=${encodeURIComponent(code)}`);
   };
 
   const n = Number.parseInt(nText, 10);
@@ -88,11 +133,18 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
     setActivePreset(id);
   };
 
+  const preset = PRESETS.find((p) => p.n === n && p.mineCount === mineCount) ?? null;
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (error) return;
-    saveLastConfig({ n, mineCount, bonus });
-    onStart({ n, mineCount, bonus });
+    const config = { n, mineCount, bonus };
+    saveLastConfig(config);
+    // Carte prédéfinie : la partie se joue sur le serveur, seul juge du temps,
+    // pour pouvoir être classée (et reprise plus tard). Les autres restent
+    // dans le navigateur.
+    if (preset) connect(`create=1&preset=${preset.id}&bonus=${bonus ? 1 : 0}`, { preset: preset.id, config });
+    else onStart(config);
   };
 
   return (
@@ -156,7 +208,25 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
           <button className="btn btn-primary" type="submit" disabled={!!error}>
             Jouer
           </button>
+          {!error && (
+            <small className="ranked-hint">
+              {preset
+                ? `Partie classée « ${preset.name} »${bonus ? ' avec bonus' : ''}, sauvegardée si tu la quittes.`
+                : 'Carte personnalisée : partie non classée.'}
+            </small>
+          )}
         </form>
+
+        {soloRoom && (
+          <button
+            type="button"
+            className="btn resume"
+            onClick={() => connect(`room=${encodeURIComponent(soloRoom.code)}`, { preset: soloRoom.preset, config: null })}
+          >
+            Reprendre ta partie {PRESETS.find((p) => p.id === soloRoom.preset)?.name ?? ''}{' '}
+            <span className="mono muted">{soloRoom.code}</span>
+          </button>
+        )}
 
         <h2>Jouer à plusieurs</h2>
         <p className="lan-help">
@@ -186,15 +256,7 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
             <input value={playerName} onChange={(e) => setPlayerName(e.target.value)} placeholder="Joueur" maxLength={24} />
           </label>
           <button className="btn" type="submit">Rejoindre</button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => {
-              const code = randomRoomCode();
-              setRoomText(code);
-              joinRoom(code);
-            }}
-          >
+          <button className="btn" type="button" onClick={() => connect('create=1')}>
             Créer une salle
           </button>
         </form>
@@ -234,9 +296,12 @@ export function HomeScreen({ onStart, onJoinLan }: HomeProps) {
                 {p.n}×{p.n} · {p.mineCount.toLocaleString('fr-FR')} bombes
               </span>
               <small>{p.note}</small>
+              <BestTime entry={recordsOf(records, p.id, bonus, 'solo')[0]} />
             </button>
           ))}
         </div>
+
+        {records.length > 0 && <RecordsTable boards={records} />}
       </div>
     </div>
   );
@@ -263,5 +328,47 @@ export function BonusToggle({
         </small>
       </span>
     </label>
+  );
+}
+
+/** Meilleur temps solo d'une carte, sous son bouton. */
+function BestTime({ entry }: { entry: RecordBoard['entries'][number] | undefined }) {
+  if (!entry) return null;
+  return (
+    <small className="best-time">
+      🏆 <span className="mono">{formatDuration(entry.elapsedMs)}</span> · {entry.names.join(', ')}
+    </small>
+  );
+}
+
+/** Classement complet des cartes prédéfinies, replié par défaut. */
+function RecordsTable({ boards }: { boards: RecordBoard[] }) {
+  const sections = PRESETS.flatMap((p) =>
+    boards
+      .filter((b) => b.preset === p.id && b.entries.length > 0)
+      .sort((a, b) => Number(a.bonus) - Number(b.bonus) || a.mode.localeCompare(b.mode))
+      .map((b) => ({ ...b, name: p.name })),
+  );
+  return (
+    <details className="records">
+      <summary>Records</summary>
+      {sections.map((b) => (
+        <div key={`${b.preset}|${b.bonus}|${b.mode}`} className="records-board">
+          <h3>
+            {b.name} · {b.mode === 'solo' ? 'solo' : 'co-op'}
+            {b.bonus ? ' · bonus' : ''}
+          </h3>
+          <ol>
+            {b.entries.map((e, k) => (
+              <li key={k}>
+                <span className="mono">{formatDuration(e.elapsedMs)}</span>
+                <span>{e.names.join(', ')}</span>
+                <small className="muted">{new Date(e.finishedAt).toLocaleDateString('fr-FR')}</small>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ))}
+    </details>
   );
 }

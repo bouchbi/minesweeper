@@ -1,6 +1,6 @@
 import { DEFUSED, FLAGGED, REVEALED } from '../src/game/board';
 import { GameEngine, type ActionResult } from '../src/game/engine';
-import { MAX_N, MIN_N } from '../src/game/presets';
+import { MAX_N, MIN_N, PRESETS } from '../src/game/presets';
 import {
   DEFAULT_NET_CONFIG,
   encodeMines,
@@ -9,15 +9,21 @@ import {
   ITEMS,
   MAX_PLAYERS,
   PLAYER_COLORS,
+  PLAYER_KEY_RE,
+  RECORD_TOP,
   type ClientMessage,
+  type EndStat,
   type NetConfig,
   type Peer,
   type Phase,
   type PlayerId,
   type PlayerInfo,
   type Rect,
+  type RecordInfo,
   type ServerMessage,
 } from '../shared/protocol';
+import { decodeSave, encodeSave, type RoomSave } from './save';
+import type { Store } from './store';
 
 /** Cadence maximale de diffusion de la présence. */
 const PRESENCE_MS = 100;
@@ -27,9 +33,28 @@ const HEARTBEAT_MS = 1000;
  *  pour qu'un simple rechargement de page ne fasse pas perdre la partie.
  *  Surchargeable par ABANDON_MS, ce qui permet de le tester sans attendre. */
 const ABANDON_MS = Number(process.env.ABANDON_MS ?? 60_000);
+/** Sauvegarde de sécurité d'une partie en cours, si quelque chose a bougé :
+ *  borne ce qu'un plantage (SIGKILL, panne) peut faire perdre. */
+const SAVE_MS = 120_000;
+
+/** Ce que le serveur prête à une salle. */
+export type RoomHooks = {
+  /** Plus personne depuis ABANDON_MS : le serveur peut libérer la salle. Une
+   *  partie en cours a été mise de côté juste avant. */
+  onEmpty(): void;
+  /** null si le serveur tourne sans stockage (dossier non accessible) : les
+   *  parties ne survivent alors pas à la salle, et rien n'est classé. */
+  store: Store | null;
+  maxSaves: number;
+  /** Un record a été inscrit ou renommé. */
+  onRecord(): void;
+};
 
 export type Connection = {
+  /** 0 tant que le joueur n'a pas envoyé `join` : sa place dépend de sa clé. */
   id: PlayerId;
+  key: string | null;
+  joined: boolean;
   name: string;
   connected: boolean;
   cursor: { x: number; y: number } | null;
@@ -47,12 +72,25 @@ export type Connection = {
  */
 export class Room {
   private clients = new Map<PlayerId, Connection>();
+  /** Connexions ouvertes qui n'ont pas encore envoyé `join`. */
+  private pending = new Set<Connection>();
   private config: NetConfig = DEFAULT_NET_CONFIG;
   private phase: Phase = 'lobby';
   /** Règles, plateau et réserve commune de la salle. null au lobby. */
   private engine: GameEngine | null = null;
   private startedAt: number | null = null;
   private stoppedAt: number | null = null;
+  /** Chrono en pause : salle vide en cours de partie. Le temps retenu (et
+   *  classé) est le temps de jeu, pas le temps écoulé entre deux sessions. */
+  private pausedAt: number | null = null;
+
+  /** Une action a eu lieu depuis la dernière sauvegarde. */
+  private dirty = false;
+  /** Une sauvegarde de cette salle existe peut-être sur disque. */
+  private saved = false;
+  private saveTimer: ReturnType<typeof setInterval> | null = null;
+  /** Record solo qui attend le nom de son auteur (une seule fois). */
+  private pendingRecord: { id: number; by: PlayerId } | null = null;
 
   /** Tampon de tri réutilisé : les cases ouvertes sortent en ordre BFS,
    *  l'encodage RLE a besoin d'index croissants. */
@@ -63,17 +101,95 @@ export class Room {
   private timer: ReturnType<typeof setInterval> | null = null;
   private abandonTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** @param onEmpty appelé quand la salle est au lobby et que plus personne
-   *  n'y est connecté : le serveur peut alors la libérer. */
-  constructor(private readonly onEmpty: () => void = () => {}) {
+  /** @param start configuration d'une partie lancée d'emblée, sans lobby
+   *  (solo sur une carte prédéfinie). */
+  constructor(
+    readonly code: string,
+    private readonly hooks: RoomHooks,
+    start?: NetConfig,
+  ) {
     this.timer = setInterval(() => this.tickPresence(), PRESENCE_MS);
+    this.saveTimer = setInterval(() => {
+      if (this.dirty) this.persist();
+    }, SAVE_MS);
+    if (start) {
+      this.config = sanitizeConfig(start);
+      this.newGame();
+    }
+  }
+
+  /** Reprend une partie mise de côté. @throws si la sauvegarde est illisible. */
+  static restore(code: string, hooks: RoomHooks, blob: Uint8Array): Room {
+    const save = decodeSave(blob);
+    const room = new Room(code, hooks);
+    room.config = save.config;
+    room.engine = GameEngine.restore(save.config, save.engine);
+    room.sortBuf = new Int32Array(save.config.n * save.config.n);
+    room.phase = 'playing';
+    room.saved = true;
+    const now = Date.now();
+    // En pause jusqu'à l'arrivée du premier joueur (voir `join`).
+    room.startedAt = now - save.elapsedMs;
+    room.pausedAt = now;
+    // Les joueurs de la session précédente, déconnectés : leur clé leur rend
+    // leur place, donc leur couleur, leurs drapeaux et leurs statistiques.
+    for (const p of save.players) {
+      room.clients.set(p.id, {
+        id: p.id,
+        key: p.key,
+        joined: true,
+        name: p.name,
+        connected: false,
+        cursor: null,
+        view: null,
+        send: () => {},
+        close: () => {},
+      });
+    }
+    return room;
   }
 
   dispose(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.saveTimer) clearInterval(this.saveTimer);
+    this.saveTimer = null;
     if (this.abandonTimer) clearTimeout(this.abandonTimer);
     this.abandonTimer = null;
+  }
+
+  /* ── Persistance ──────────────────────────────────────────────────── */
+
+  /** Met la partie en cours de côté. Sans effet hors partie, ou avant le
+   *  premier geste (rien à perdre). Appelé aussi à l'arrêt du serveur. */
+  persist(): void {
+    const { store } = this.hooks;
+    const engine = this.playing();
+    if (!store || !engine || this.startedAt === null) return;
+    try {
+      const save: RoomSave = {
+        config: this.config,
+        elapsedMs: this.elapsedMs(),
+        players: [...this.clients.values()].map((c) => ({ id: c.id, key: c.key, name: c.name })),
+        engine: engine.serialize(),
+      };
+      store.writeSave(this.code, encodeSave(save), this.hooks.maxSaves);
+      this.saved = true;
+      this.dirty = false;
+    } catch (err) {
+      console.error(`[${this.code}] sauvegarde impossible :`, err);
+    }
+  }
+
+  /** La partie est finie ou abandonnée : sa sauvegarde n'a plus d'objet. */
+  private dropSave(): void {
+    if (!this.saved || !this.hooks.store) return;
+    this.saved = false;
+    try {
+      this.hooks.store.deleteSave(this.code);
+    } catch (err) {
+      console.error(`[${this.code}] suppression de la sauvegarde impossible :`, err);
+    }
   }
 
   /* ── Connexions ───────────────────────────────────────────────────── */
@@ -85,61 +201,104 @@ export class Room {
     return null;
   }
 
+  /** Nouvelle connexion. Sa place (id, couleur) n'est attribuée qu'à la
+   *  réception de `join`, qui porte la clé du joueur.
+   *  @returns null si la salle est complète. */
   join(send: (d: string | Uint8Array) => void, close: () => void): Connection | null {
-    const id = this.freeId();
-    if (id === null) return null;
+    let connected = this.pending.size;
+    for (const c of this.clients.values()) if (c.connected) connected++;
+    if (connected >= MAX_PLAYERS) return null;
     const conn: Connection = {
-      id,
-      name: `Joueur ${id}`,
+      id: 0,
+      key: null,
+      joined: false,
+      name: '',
       connected: true,
       cursor: null,
       view: null,
       send,
       close,
     };
-    this.clients.set(id, conn);
+    this.pending.add(conn);
     if (this.abandonTimer) {
       clearTimeout(this.abandonTimer);
       this.abandonTimer = null;
     }
+    if (this.pausedAt !== null) {
+      if (this.startedAt !== null) this.startedAt += Date.now() - this.pausedAt;
+      this.pausedAt = null;
+    }
     return conn;
+  }
+
+  /** `join` reçu : place du joueur, reprise de la sienne s'il revient. */
+  private admit(conn: Connection, name: unknown, rawKey: unknown): boolean {
+    const key = typeof rawKey === 'string' && PLAYER_KEY_RE.test(rawKey) ? rawKey : null;
+    let id: PlayerId | null = null;
+    let previous: Connection | undefined;
+    if (key) {
+      for (const c of this.clients.values()) {
+        if (!c.connected && c.key === key) {
+          id = c.id;
+          previous = c;
+          break;
+        }
+      }
+    }
+    id ??= this.freeId();
+    if (id === null) return false;
+    this.pending.delete(conn);
+    conn.id = id;
+    conn.key = key;
+    conn.joined = true;
+    conn.name = String(name ?? '').slice(0, 24) || previous?.name || `Joueur ${id}`;
+    this.clients.set(id, conn);
+    return true;
   }
 
   leave(conn: Connection): void {
     conn.connected = false;
     conn.cursor = null;
     conn.view = null;
-    // En lobby on oublie le joueur ; en partie on le garde pour conserver la
-    // couleur de ses drapeaux et lui permettre de revenir.
-    if (this.phase === 'lobby') this.clients.delete(conn.id);
-    this.broadcastPlayers();
+    if (!conn.joined) {
+      this.pending.delete(conn);
+    } else if (this.clients.get(conn.id) === conn) {
+      // En lobby on oublie le joueur ; en partie on le garde pour conserver la
+      // couleur de ses drapeaux et lui permettre de revenir.
+      if (this.phase === 'lobby') this.clients.delete(conn.id);
+      this.broadcastPlayers();
+    }
 
-    // Plus personne : la partie est abandonnée. Sans ça, elle resterait
-    // éternellement en cours et le prochain arrivant tomberait dedans sans
-    // pouvoir en sortir.
-    if (this.isEmpty()) {
-      if (this.phase === 'lobby') this.onEmpty();
-      else if (!this.abandonTimer) {
-        this.abandonTimer = setTimeout(() => {
-          this.abandonTimer = null;
-          this.toLobby();
-          if (this.isEmpty()) this.onEmpty();
-        }, ABANDON_MS);
-      }
+    // Plus personne : le chrono s'arrête, et la salle est libérée après un
+    // délai assez long pour qu'un rechargement de page ne la fasse pas perdre.
+    // Une partie en cours est alors mise de côté, et reprendra au retour d'un
+    // joueur avec le même code.
+    if (this.isEmpty() && !this.abandonTimer) {
+      if (this.phase === 'playing' && this.pausedAt === null) this.pausedAt = Date.now();
+      this.abandonTimer = setTimeout(() => {
+        this.abandonTimer = null;
+        if (!this.isEmpty()) return;
+        this.persist();
+        this.hooks.onEmpty();
+      }, ABANDON_MS);
     }
   }
 
   private isEmpty(): boolean {
+    if (this.pending.size > 0) return false;
     for (const c of this.clients.values()) if (c.connected) return false;
     return true;
   }
 
   /** Ramène la salle au lobby : la configuration reste, le plateau disparaît. */
   private toLobby(): void {
+    this.dropSave();
+    this.pendingRecord = null;
     this.phase = 'lobby';
     this.engine = null;
     this.startedAt = null;
     this.stoppedAt = null;
+    this.pausedAt = null;
     // Les déconnectés n'étaient gardés que pour préserver leurs drapeaux le
     // temps de la partie.
     for (const [id, c] of [...this.clients]) if (!c.connected) this.clients.delete(id);
@@ -175,6 +334,8 @@ export class Room {
   }
 
   private broadcast(data: string | Uint8Array): void {
+    // Les connexions en attente de `join` ne reçoivent rien : leur `welcome`
+    // contiendra l'état complet.
     for (const c of this.clients.values()) if (c.connected) c.send(data);
   }
 
@@ -188,7 +349,7 @@ export class Room {
 
   elapsedMs(): number {
     if (this.startedAt === null) return 0;
-    return (this.stoppedAt ?? Date.now()) - this.startedAt;
+    return (this.stoppedAt ?? this.pausedAt ?? Date.now()) - this.startedAt;
   }
 
   /* ── Réception ────────────────────────────────────────────────────── */
@@ -203,11 +364,19 @@ export class Room {
     // Le serveur est exposé à Internet : `null`, un nombre ou un objet sans
     // `t` ne doivent pas faire tomber le processus sur `msg.t`.
     if (typeof msg !== 'object' || msg === null || typeof msg.t !== 'string') return;
+    // Rien d'autre n'est accepté avant `join` : le joueur n'a pas encore de place.
+    if (!conn.joined && msg.t !== 'join') return;
     switch (msg.t) {
       case 'join':
-        conn.name = String(msg.name ?? '').slice(0, 24) || conn.name;
+        if (conn.joined) return;
+        if (!this.admit(conn, msg.name, msg.key)) {
+          this.send(conn, { t: 'error', message: 'Salle complète (8 joueurs maximum).' });
+          conn.close();
+          return;
+        }
         this.send(conn, {
           t: 'welcome',
+          code: this.code,
           selfId: conn.id,
           players: this.players(),
           phase: this.phase,
@@ -265,6 +434,22 @@ export class Room {
         this.doUse(conn, msg.item, msg.i);
         break;
 
+      case 'recordName': {
+        const rec = this.pendingRecord;
+        const name = String(msg.name ?? '').trim().slice(0, 24);
+        if (!rec || rec.by !== conn.id || !name || !this.hooks.store) return;
+        this.pendingRecord = null;
+        conn.name = name;
+        try {
+          this.hooks.store.renameRecord(rec.id, [name]);
+          this.hooks.onRecord();
+        } catch (err) {
+          console.error(`[${this.code}] record non renommé :`, err);
+        }
+        this.broadcastPlayers();
+        break;
+      }
+
       case 'cursor': {
         // La vue est rediffusée telle quelle à tous les joueurs : on la
         // reconstruit champ par champ plutôt que de relayer un objet arbitraire.
@@ -282,10 +467,13 @@ export class Room {
 
   private newGame(): void {
     const { n } = this.config;
+    this.dropSave();
+    this.pendingRecord = null;
     this.engine = new GameEngine(this.config);
     this.sortBuf = new Int32Array(n * n);
     this.startedAt = null;
     this.stoppedAt = null;
+    this.pausedAt = null;
     this.phase = 'playing';
     // Les joueurs déconnectés pendant la partie précédente sont oubliés ici.
     for (const [id, c] of [...this.clients]) if (!c.connected) this.clients.delete(id);
@@ -308,6 +496,7 @@ export class Room {
     const result = engine.reveal(i, conn.id);
     if (!result) return;
     this.startClock();
+    this.dirty = true;
     this.publish(engine, result, conn.id);
   }
 
@@ -317,7 +506,9 @@ export class Room {
     // La réserve est commune : si deux joueurs posent le dernier objet en même
     // temps, le second message trouve la réserve vide et ne fait rien.
     const result = engine.use(item, i, conn.id);
-    if (result) this.publish(engine, result, conn.id);
+    if (!result) return;
+    this.dirty = true;
+    this.publish(engine, result, conn.id);
   }
 
   /** Diffuse le résultat d'une action à toute la salle. */
@@ -343,14 +534,62 @@ export class Room {
     if (result.outcome === 'dead') {
       this.phase = 'dead';
       this.stoppedAt = Date.now();
+      this.dropSave();
       // Les mines ne quittent le serveur qu'ici, une fois la partie finie
       // (en dehors de celles désamorcées, publiques par définition).
       this.broadcast(encodeMines(board.n, board.mines));
-      this.broadcastMsg({ t: 'over', outcome: 'dead', by, elapsedMs: this.elapsedMs() });
+      this.broadcastMsg({ t: 'over', outcome: 'dead', by, elapsedMs: this.elapsedMs(), stats: this.endStats(engine), record: null });
     } else if (result.outcome === 'won') {
       this.phase = 'won';
       this.stoppedAt = Date.now();
-      this.broadcastMsg({ t: 'over', outcome: 'won', by, elapsedMs: this.elapsedMs() });
+      this.dropSave();
+      const elapsedMs = this.elapsedMs();
+      this.broadcastMsg({
+        t: 'over',
+        outcome: 'won',
+        by,
+        elapsedMs,
+        stats: this.endStats(engine),
+        record: this.recordWin(engine, elapsedMs),
+      });
+    }
+  }
+
+  private endStats(engine: GameEngine): EndStat[] {
+    const out: EndStat[] = [];
+    for (const [id, st] of engine.stats()) {
+      if (id === 0) continue; // drapeaux sans auteur : impossible en réseau
+      out.push({
+        ...st,
+        id,
+        name: this.clients.get(id)?.name ?? `Joueur ${id}`,
+        color: PLAYER_COLORS[id] ?? PLAYER_COLORS[0],
+      });
+    }
+    return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** Inscrit la victoire au classement de sa carte s'il s'agit d'une carte
+   *  prédéfinie et que le temps entre dans les RECORD_TOP meilleurs. */
+  private recordWin(engine: GameEngine, elapsedMs: number): RecordInfo | null {
+    const { store } = this.hooks;
+    const { n, mineCount, bonus } = this.config;
+    const preset = PRESETS.find((p) => p.n === n && p.mineCount === mineCount);
+    const ids = engine.participants.filter((id) => id > 0).sort((a, b) => a - b);
+    if (!store || !preset || ids.length === 0) return null;
+    const mode = ids.length === 1 ? 'solo' : 'coop';
+    try {
+      const rank = store.rankFor(preset.id, bonus, mode, elapsedMs);
+      if (rank > RECORD_TOP) return null;
+      const names = ids.map((id) => this.clients.get(id)?.name ?? `Joueur ${id}`);
+      const id = store.addRecord(preset.id, bonus, mode, elapsedMs, names);
+      this.hooks.onRecord();
+      const nameable = mode === 'solo' ? ids[0] : null;
+      if (nameable !== null) this.pendingRecord = { id, by: nameable };
+      return { preset: preset.id, bonus, mode, rank, nameable };
+    } catch (err) {
+      console.error(`[${this.code}] record non inscrit :`, err);
+      return null;
     }
   }
 
@@ -362,6 +601,7 @@ export class Room {
     this.startClock();
     const delta = engine.flag(i, conn.id);
     if (delta === 0) return;
+    this.dirty = true;
     this.broadcastMsg({
       t: 'flag',
       i,

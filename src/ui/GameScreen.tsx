@@ -6,6 +6,7 @@ import { addBeam, clearDiscos, startDisco, zoneCells, type Disco, type DiscoBeam
 import { createGameView, type GameView } from '../render/gameView';
 import { worldToScreenX, worldToScreenY } from '../render/viewport';
 import type { GameEvent, Item } from '../../shared/protocol';
+import { EndPanel } from './EndPanel';
 import { GameCanvas } from './GameCanvas';
 import {
   BombCounter,
@@ -310,6 +311,13 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap, ro
     onExit();
   }, [isOver, session, onExit]);
 
+  // Bilan de fin : rouvert à chaque fin de partie, refermable pour regarder
+  // la carte.
+  const [showEnd, setShowEnd] = useState(true);
+  useEffect(() => {
+    if (isOver) setShowEnd(true);
+  }, [isOver]);
+
   const total = useMemo(() => config.n * config.n, [config.n]);
   const banner = CONNECTION_LABEL[session.connection];
   const isNet = session.connection !== 'local';
@@ -337,6 +345,11 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap, ro
         {session.over === 'dead' && <span className="badge badge-dead">Perdu</span>}
         {session.over === 'won' && <span className="badge badge-won">Gagné</span>}
         <ViewReadout view={view} />
+        {isOver && !showEnd && (
+          <button className="btn" onClick={() => setShowEnd(true)}>
+            Bilan
+          </button>
+        )}
         {isOver && session.canRestart && (
           <button className="btn btn-accent" onClick={onRestart}>
             Rejouer
@@ -368,6 +381,7 @@ export function GameScreen({ session, config, onExit, onRestart, onChangeMap, ro
         />
         <Minimap board={session.board} view={view} />
         <ChatLog lines={chat} />
+        {isOver && showEnd && <EndPanel session={session} onClose={() => setShowEnd(false)} />}
       </div>
 
       <footer className="help mono">

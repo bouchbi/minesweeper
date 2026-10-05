@@ -1,6 +1,17 @@
 import type { Board } from './board';
 import { GameEngine, type ActionResult, type GameConfig } from './engine';
-import type { GameEvent, Inventory, Item, Peer, PlayerId, PlayerInfo, Rect } from '../../shared/protocol';
+import {
+  PLAYER_COLORS,
+  type EndStat,
+  type GameEvent,
+  type Inventory,
+  type Item,
+  type Peer,
+  type PlayerId,
+  type PlayerInfo,
+  type RecordInfo,
+  type Rect,
+} from '../../shared/protocol';
 
 export type { GameConfig };
 export type Over = null | 'dead' | 'won';
@@ -27,6 +38,13 @@ export interface Session {
   /** Faux pour un invité en réseau : seul l'hôte relance. */
   readonly canRestart: boolean;
   readonly clockRunning: boolean;
+  /** Compteurs par joueur, connus une fois la partie finie (null avant). */
+  readonly endStats: EndStat[] | null;
+  /** Place au classement obtenue par cette victoire ; toujours null en solo
+   *  local, qui n'est pas classé (le navigateur pourrait tout truquer). */
+  readonly record: RecordInfo | null;
+  /** Inscrit son nom sur le record solo qui vient d'être établi. */
+  nameRecord(name: string): void;
   elapsedMs(): number;
   reveal(i: number): void;
   flag(i: number): void;
@@ -63,6 +81,8 @@ export class LocalSession implements Session {
   readonly connection: Connection = 'local';
   readonly canRestart = true;
   clockRunning = false;
+  endStats: EndStat[] | null = null;
+  readonly record = null;
 
   private boardListeners = new Set<() => void>();
   private stateListeners = new Set<() => void>();
@@ -150,6 +170,7 @@ export class LocalSession implements Session {
     if (result.outcome) {
       this.stoppedAt = performance.now();
       this.clockRunning = false;
+      this.endStats = [...this.engine.stats()].map(([id, st]) => ({ ...st, id, name: 'Toi', color: PLAYER_COLORS[1] }));
     }
     if (result.events.length > 0) {
       this.lastOpened = result.opened;
@@ -162,6 +183,10 @@ export class LocalSession implements Session {
 
   moveCursor(): void {
     /* personne à prévenir en solo */
+  }
+
+  nameRecord(): void {
+    /* solo local : jamais classé */
   }
 
   dispose(): void {
